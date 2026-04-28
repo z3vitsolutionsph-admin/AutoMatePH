@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System operator (Admin, Manager, Cashier)",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["SUPER_ADMIN", "STORE_MANAGER", "CASHIER"] },
+        "pin": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["email", "name", "role", "createdAt", "updatedAt", "isActive"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory item",
+      "type": "object",
+      "properties": {
+        "barcode": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "cost": { "type": "number" },
+        "stock": { "type": "number" },
+        "minStock": { "type": "number" },
+        "category": { "type": "string" },
+        "locationId": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["barcode", "name", "price", "cost", "stock", "createdAt", "updatedAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "A POS sale",
+      "type": "object",
+      "properties": {
+        "totalAmount": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["CASH", "CARD", "E_WALLET"] },
+        "cashierId": { "type": "string" },
+        "items": { "type": "array" },
+        "status": { "type": "string", "enum": ["COMPLETED", "VOIDED"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["totalAmount", "paymentMethod", "cashierId", "items", "status", "createdAt", "updatedAt"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "Audit trail for system actions",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["STOCK_ADJUSTMENT", "SALE", "INBOUND_DELIVERY"] },
+        "userId": { "type": "string" },
+        "details": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["type", "userId", "details", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profiles and roles"
+    },
+    "/products/{productId}": {
+      "schema": { "$ref": "#/entities/Product" },
+      "description": "Global product catalog"
+    },
+    "/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Sales records"
+    },
+    "/activityLogs/{logId}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "System audit trail"
+    }
+  }
+}

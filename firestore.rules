@@ -1,0 +1,177 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} { 
+      allow read, write: if false; 
+    }
+
+    // --- PRIMITIVES ---
+    function isValidId(id) { 
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); 
+    }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    
+    // Bootstrapped Admin: Your user email is given admin role for testing.
+    function isSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == "z3vitsolutions.ph@gmail.com" ||
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "SUPER_ADMIN"
+      );
+    }
+    
+    function isStoreManager() {
+      return isSignedIn() && (
+        request.auth.token.email == "z3vitsolutions.ph@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["STORE_MANAGER", "SUPER_ADMIN"])
+      );
+    }
+    
+    function isCashierOrHigher() {
+      return isSignedIn() && (
+        request.auth.token.email == "z3vitsolutions.ph@gmail.com" ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["CASHIER", "STORE_MANAGER", "SUPER_ADMIN"])
+      );
+    }
+
+    // --- VALIDATION HELPERS (Anti-Update-Gap) ---
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(["email", "name", "role", "createdAt", "updatedAt", "isActive"])
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 100
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.role in ["SUPER_ADMIN", "STORE_MANAGER", "CASHIER"]
+        && (data.get('pin', '') is string) // optional or strictly string
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && data.isActive is bool;
+    }
+
+    function isValidProduct(data) {
+      return data.keys().hasAll(["barcode", "name", "price", "cost", "stock", "createdAt", "updatedAt"])
+        && data.barcode is string && data.barcode.size() > 0 && data.barcode.size() <= 64
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.price is number && data.price >= 0
+        && data.cost is number && data.cost >= 0
+        && data.stock is number && data.stock >= 0
+        && (data.get('minStock', 0) is number)
+        && (data.get('category', '') is string)
+        && (data.get('locationId', '') is string)
+        && (data.get('description', '') is string)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTransaction(data) {
+      return data.keys().hasAll(["totalAmount", "paymentMethod", "cashierId", "items", "status", "createdAt", "updatedAt"])
+        && data.totalAmount is number && data.totalAmount >= 0
+        && data.paymentMethod in ["CASH", "CARD", "E_WALLET"]
+        && data.cashierId is string
+        && data.items is list && data.items.size() > 0 && data.items.size() <= 500
+        && data.status in ["COMPLETED", "VOIDED"]
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidActivityLog(data) {
+      return data.keys().hasAll(["type", "userId", "details", "timestamp"])
+        && data.type in ["STOCK_ADJUSTMENT", "SALE", "INBOUND_DELIVERY"]
+        && data.userId is string
+        && data.details is string && data.details.size() <= 1000
+        && data.timestamp is timestamp;
+    }
+    
+    // --- COLLECTIONS ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin() || isStoreManager());
+      allow list: if isSignedIn() && isSuperAdmin(); // Prevent PII Blanket Read
+      
+      allow create: if isSuperAdmin() 
+        && isValidId(userId)
+        && isValidUser(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if (isSuperAdmin() || (request.auth.uid == userId && incoming().role == existing().role && incoming().isActive == existing().isActive))
+        && isValidId(userId)
+        && isValidUser(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isSuperAdmin() || 
+          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'pin', 'updatedAt'])
+        );
+        
+      allow delete: if isSuperAdmin();
+    }
+
+    match /products/{productId} {
+      allow get: if isCashierOrHigher();
+      allow list: if isCashierOrHigher();
+      
+      allow create: if isStoreManager()
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if (isStoreManager() && 
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'barcode', 'name', 'price', 'cost', 'stock', 'minStock', 
+            'category', 'locationId', 'description', 'updatedAt'
+          ])
+        ) || (isCashierOrHigher() &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'updatedAt'])
+        )
+        && isValidId(productId)
+        && isValidProduct(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+        
+      allow delete: if isSuperAdmin();
+    }
+
+    match /transactions/{transactionId} {
+      allow get: if isStoreManager() || (isCashierOrHigher() && existing().cashierId == request.auth.uid);
+      allow list: if isStoreManager() || (isCashierOrHigher() && resource.data.cashierId == request.auth.uid);
+      
+      allow create: if isCashierOrHigher()
+        && isValidId(transactionId)
+        && isValidTransaction(incoming())
+        && incoming().cashierId == request.auth.uid 
+        && exists(/databases/$(database)/documents/users/$(incoming().cashierId)) // No orphaned writes
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if isSuperAdmin() // Only admins can modify transactions
+        && isValidId(transactionId)
+        && isValidTransaction(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && existing().status != 'VOIDED' // Terminal State Guard
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']);
+        
+      allow delete: if false; // Transactions are immutable. Void them instead.
+    }
+
+    match /activityLogs/{logId} {
+      allow get: if isStoreManager();
+      allow list: if isStoreManager();
+      
+      allow create: if isCashierOrHigher()
+        && isValidId(logId)
+        && isValidActivityLog(incoming())
+        && incoming().timestamp == request.time;
+        
+      allow update: if false; // Immutable
+      allow delete: if false; // Immutable
+    }
+  }
+}

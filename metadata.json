@@ -1,0 +1,8 @@
+{
+  "name": "AutoMatePH",
+  "description": "AI-Powered Core POS & Inventory System engineered for modern retail environments, featuring real-time tracking and offline resilience.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
