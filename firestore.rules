@@ -13,7 +13,7 @@ service cloud.firestore {
     }
     function incoming() { return request.resource.data; }
     function existing() { return resource.data; }
-    function isSignedIn() { return request.auth != null && request.auth.token.email_verified == true; }
+    function isSignedIn() { return request.auth != null; }
     
     // Bootstrapped Admin: Your user email is given admin role for testing.
     function isSuperAdmin() {
@@ -93,7 +93,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin() || isStoreManager());
       allow list: if isSignedIn() && isSuperAdmin(); // Prevent PII Blanket Read
       
-      allow create: if isSuperAdmin() 
+      allow create: if (isSuperAdmin() || request.auth.uid == userId) 
         && isValidId(userId)
         && isValidUser(incoming())
         && incoming().createdAt == request.time

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { User, onAuthStateChanged, signOut, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { User, onAuthStateChanged, signOut, GoogleAuthProvider, signInWithPopup, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, getDoc, setDoc, serverTimestamp, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 
@@ -9,6 +9,8 @@ interface AuthContextType {
   role: string | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string, name: string, role: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -20,44 +22,59 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+    let unsubscribeUserDoc: (() => void) | null = null;
+    const unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+        unsubscribeUserDoc = null;
+      }
+
       setUser(firebaseUser);
       if (firebaseUser) {
         try {
           const userDocRef = doc(db, 'users', firebaseUser.uid);
-          const userDoc = await getDoc(userDocRef);
-          
-          if (userDoc.exists()) {
-            setRole(userDoc.data().role);
-          } else {
-            // Check if this is the bootstrapped admin
-            if (firebaseUser.email === 'z3vitsolutions.ph@gmail.com') {
-               await setDoc(userDocRef, {
-                 email: firebaseUser.email,
-                 name: firebaseUser.displayName || 'Admin',
-                 role: 'SUPER_ADMIN',
-                 createdAt: serverTimestamp(),
-                 updatedAt: serverTimestamp(),
-                 isActive: true,
-               });
-               setRole('SUPER_ADMIN');
+          unsubscribeUserDoc = onSnapshot(userDocRef, async (userDoc) => {
+            if (userDoc.exists()) {
+              setRole(userDoc.data().role);
+              setLoading(false);
             } else {
-               // Default creation
-               setRole(null); 
+              if (firebaseUser.email === 'z3vitsolutions.ph@gmail.com') {
+                 await setDoc(userDocRef, {
+                   email: firebaseUser.email,
+                   name: firebaseUser.displayName || 'Admin',
+                   role: 'SUPER_ADMIN',
+                   createdAt: serverTimestamp(),
+                   updatedAt: serverTimestamp(),
+                   isActive: true,
+                 });
+              } else {
+                 setRole(null); 
+                 setLoading(false);
+              }
             }
-          }
+          }, (error) => {
+             handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+             setLoading(false);
+          });
         } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+           handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+           setLoading(false);
         }
       } else {
         setRole(null);
+        setLoading(false);
       }
-      setLoading(false);
     }, (error) => {
        handleFirestoreError(error, OperationType.GET, 'auth');
+       setLoading(false);
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeUserDoc) {
+        unsubscribeUserDoc();
+      }
+    };
   }, []);
 
   const signInWithGoogle = async () => {
@@ -65,12 +82,34 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await signInWithPopup(auth, provider);
   };
 
+  const signIn = async (email: string, password: string) => {
+    await signInWithEmailAndPassword(auth, email, password);
+  };
+
+  const signUp = async (email: string, password: string, name: string, selectedRole: string) => {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const firebaseUser = userCredential.user;
+    
+    const validRole = ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER'].includes(selectedRole) ? selectedRole : 'CASHIER';
+
+    const userDocRef = doc(db, 'users', firebaseUser.uid);
+    await setDoc(userDocRef, {
+      email: firebaseUser.email,
+      name: name,
+      role: validRole,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      isActive: true,
+    });
+    setRole(validRole);
+  };
+
   const logout = async () => {
     await signOut(auth);
   };
 
   return (
-    <AuthContext.Provider value={{ user, role, loading, signInWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, role, loading, signInWithGoogle, signIn, signUp, logout }}>
       {!loading && children}
     </AuthContext.Provider>
   );
