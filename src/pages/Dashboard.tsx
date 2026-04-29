@@ -4,7 +4,7 @@ import { db } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { PackageSearch, TrendingUp, AlertTriangle, Activity } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Stats {
@@ -17,6 +17,8 @@ interface Stats {
 export function Dashboard() {
   const [stats, setStats] = useState<Stats>({ totalProducts: 0, lowStockItems: 0, totalSales: 0, recentTransactionsCount: 0 });
   const [salesData, setSalesData] = useState<{name: string; sales: number}[]>([]);
+  const [isLoadingSales, setIsLoadingSales] = useState(true);
+  const [salesError, setSalesError] = useState<string | null>(null);
   const { role } = useAuth();
 
   useEffect(() => {
@@ -46,17 +48,50 @@ export function Dashboard() {
           recentCount++;
           
           if (data.createdAt) {
-            const date = data.createdAt.toDate ? data.createdAt.toDate() : new Date(data.createdAt);
-            const label = `${date.getHours()}:00`;
-            dataMap.set(label, (dataMap.get(label) || 0) + data.totalAmount);
+            let date;
+            if (typeof data.createdAt?.toDate === 'function') {
+              date = data.createdAt.toDate();
+            } else {
+              // Fallback for timestamp alternatives or strings
+              date = new Date(data.createdAt.seconds ? data.createdAt.seconds * 1000 : data.createdAt);
+            }
+
+            if (!isNaN(date.getTime())) {
+              const hour = date.getHours().toString().padStart(2, '0');
+              const label = `${hour}:00`;
+              dataMap.set(label, (dataMap.get(label) || 0) + data.totalAmount);
+            }
           }
         }
       });
       
-      const chartData = Array.from(dataMap.entries()).map(([name, sales]) => ({ name, sales })).reverse();
+      const sortedEntries = Array.from(dataMap.entries())
+        .sort((a, b) => a[0].localeCompare(b[0]));
+        
+      if (sortedEntries.length > 0) {
+        const firstHour = parseInt(sortedEntries[0][0].split(':')[0]);
+        const lastHour = parseInt(sortedEntries[sortedEntries.length - 1][0].split(':')[0]);
+        for (let h = firstHour; h <= lastHour; h++) {
+          const hourLabel = `${h.toString().padStart(2, '0')}:00`;
+          if (!dataMap.has(hourLabel)) {
+            dataMap.set(hourLabel, 0);
+          }
+        }
+      }
+
+      const chartData = Array.from(dataMap.entries())
+        .map(([name, sales]) => ({ name, sales }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+        
       setSalesData(chartData);
       setStats(s => ({ ...s, totalSales, recentTransactionsCount: recentCount }));
-    }, (e) => handleFirestoreError(e, OperationType.GET, 'transactions'));
+      setIsLoadingSales(false);
+      setSalesError(null);
+    }, (e) => {
+      setSalesError("Unable to load telemetry data.");
+      setIsLoadingSales(false);
+      handleFirestoreError(e, OperationType.GET, 'transactions');
+    });
 
     return () => {
       unsubProducts();
@@ -128,18 +163,33 @@ export function Dashboard() {
             <CardTitle className="text-sm font-mono text-[#7A736E]">REVENUE TELEMETRY (HOURLY)</CardTitle>
           </CardHeader>
           <CardContent className="h-[300px] w-full">
-            {salesData.length > 0 ? (
+             {isLoadingSales ? (
+               <div className="h-full w-full flex items-center justify-center font-mono text-[#7A736E] animate-pulse">
+                 SYNCING TELEMETRY...
+               </div>
+             ) : salesError ? (
+               <div className="h-full w-full flex items-center justify-center font-mono text-red-500">
+                 {salesError}
+               </div>
+             ) : salesData.length > 0 ? (
                <ResponsiveContainer width="100%" height="100%">
-                 <LineChart data={salesData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                 <AreaChart data={salesData} margin={{ top: 10, right: 30, bottom: 0, left: 0 }}>
+                   <defs>
+                     <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
+                       <stop offset="5%" stopColor="#FF6F00" stopOpacity={0.3}/>
+                       <stop offset="95%" stopColor="#FF6F00" stopOpacity={0}/>
+                     </linearGradient>
+                   </defs>
                    <CartesianGrid strokeDasharray="3 3" stroke="#3A3230" vertical={false} />
-                   <XAxis dataKey="name" stroke="#7A736E" fontSize={12} tickLine={false} axisLine={false} />
-                   <YAxis stroke="#7A736E" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `₱${value}`} />
+                   <XAxis dataKey="name" stroke="#7A736E" fontSize={12} tickLine={false} axisLine={false} tickMargin={10} />
+                   <YAxis stroke="#7A736E" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `₱${value.toLocaleString()}`} tickMargin={10} />
                    <Tooltip 
                      contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px' }}
                      itemStyle={{ color: '#FF6F00' }}
+                     formatter={(value: number) => [`₱${value.toLocaleString()}`, 'Revenue']}
                    />
-                   <Line type="monotone" dataKey="sales" stroke="#FF6F00" strokeWidth={3} dot={{ r: 4, fill: '#1A1614', stroke: '#FF6F00' }} activeDot={{ r: 6, fill: '#FF6F00' }} />
-                 </LineChart>
+                   <Area type="monotone" dataKey="sales" stroke="#FF6F00" strokeWidth={3} fillOpacity={1} fill="url(#colorSales)" activeDot={{ r: 6, fill: '#FF6F00', stroke: '#141210', strokeWidth: 2 }} />
+                 </AreaChart>
                </ResponsiveContainer>
             ) : (
                <div className="h-full w-full flex items-center justify-center font-mono text-[#7A736E]">AWAITING DATA</div>
