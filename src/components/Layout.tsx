@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Package, ShoppingCart, LayoutDashboard, LogOut, Activity, Terminal } from 'lucide-react';
@@ -10,6 +10,12 @@ export function Layout() {
   const { user, role, logout } = useAuth();
   const location = useLocation();
   const [terminalOpen, setTerminalOpen] = useState(false);
+
+  useEffect(() => {
+    const handleOpenTerminal = () => setTerminalOpen(true);
+    window.addEventListener('open-terminal', handleOpenTerminal);
+    return () => window.removeEventListener('open-terminal', handleOpenTerminal);
+  }, []);
 
   const navItems = [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },

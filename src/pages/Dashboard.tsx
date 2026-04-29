@@ -255,7 +255,10 @@ export function Dashboard() {
                
                {/* We will build the global terminal chatbot later */}
                <div className="text-center mt-8">
-                 <button className="text-[#FF6F00] font-mono text-xs border-b border-dashed border-[#FF6F00] pb-1 hover:text-[#FAF7F2] hover:border-[#FAF7F2] transition-colors">
+                 <button 
+                   onClick={() => window.dispatchEvent(new CustomEvent('open-terminal'))}
+                   className="text-[#FF6F00] font-mono text-xs border-b border-dashed border-[#FF6F00] pb-1 hover:text-[#FAF7F2] hover:border-[#FAF7F2] transition-colors"
+                 >
                    OPEN ASSISTANT TERMINAL
                  </button>
                </div>
