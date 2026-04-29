@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff } from 'lucide-react';
+import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff, Camera, X } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -10,6 +10,7 @@ import { db, auth } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { BrowserMultiFormatReader } from '@zxing/library';
 
 // Mock inventory for quick demonstration, but we'll sync with Firestore
 interface Product {
@@ -77,6 +78,135 @@ export function POS() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    return () => {
+      if (codeReaderRef.current) {
+        codeReaderRef.current.reset();
+      }
+    };
+  }, []);
+
+  const [isScanning, setIsScanning] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const codeReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+
+  useEffect(() => {
+    // Auto-add product if barcode matches exactly
+    if (searchQuery) {
+      const exactMatch = products.find(p => p.barcode === searchQuery);
+      if (exactMatch) {
+         addToCart(exactMatch);
+         setSearchQuery('');
+      }
+    }
+  }, [searchQuery, products]);
+
+  const playBeep = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      oscillator.type = 'sine';
+      oscillator.frequency.value = 800;
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      
+      oscillator.start();
+      setTimeout(() => oscillator.stop(), 100);
+    } catch (e) {
+      console.error("Audio beep failed", e);
+    }
+  };
+
+  const lastScannedBarcode = useRef<string | null>(null);
+  const lastScanTime = useRef<number>(0);
+
+  const startScanner = async () => {
+    if (!videoRef.current) {
+      toast.error('Scanner initialized improperly.');
+      return;
+    }
+    setIsScanning(true);
+    
+    const handleResult = (result: any, error: any) => {
+      if (result) {
+        const scannedBarcode = result.getText();
+        const now = Date.now();
+        
+        // Prevent rapid re-scanning of the same barcode within 2 seconds
+        if (scannedBarcode === lastScannedBarcode.current && now - lastScanTime.current < 2000) {
+          return;
+        }
+        
+        lastScannedBarcode.current = scannedBarcode;
+        lastScanTime.current = now;
+        
+        playBeep();
+        const exactMatch = products.find(p => p.barcode === scannedBarcode);
+        if (exactMatch) {
+          toast.success(`Added 1x ${exactMatch.name}`);
+          addToCart(exactMatch);
+          // Keep scanning continuously for POS!
+        } else {
+          toast.warning('Product barcode not recognized in inventory');
+          setSearchQuery(scannedBarcode);
+          stopScanner(); // Stop if not found so they can manually intervene
+        }
+      }
+      if (error && error.name !== 'NotFoundException') {
+        // console.warn('Scanner error:', error); // can be noisy
+      }
+    };
+
+    try {
+      if (!codeReaderRef.current) {
+        codeReaderRef.current = new BrowserMultiFormatReader();
+      }
+      
+      try {
+        await codeReaderRef.current.decodeFromConstraints(
+          { video: { facingMode: 'environment' } }, 
+          videoRef.current, 
+          handleResult
+        );
+      } catch (err: any) {
+        // Fallback to any camera if environment facing fails
+        console.warn('Failed to start environment camera, falling back to default:', err);
+        await codeReaderRef.current.decodeFromConstraints(
+          { video: true },
+          videoRef.current,
+          handleResult
+        );
+      }
+    } catch (err: any) {
+      console.error('Camera initialization error:', err);
+      let errorMessage = 'Could not start camera. Please check permissions.';
+      if (err?.name === 'NotAllowedError') {
+        errorMessage = 'Camera access was denied. Please grant permissions in your browser.';
+      } else if (err?.name === 'NotFoundError') {
+        errorMessage = 'No camera found on this device.';
+      } else if (err?.name === 'NotReadableError') {
+        errorMessage = 'Camera is already in use by another application.';
+      } else if (err?.message) {
+        errorMessage = `Camera error: ${err.message}`;
+      }
+      toast.error(errorMessage);
+      setIsScanning(false);
+    }
+  };
+
+
+  const stopScanner = () => {
+    if (codeReaderRef.current) {
+      codeReaderRef.current.reset();
+    }
+    setIsScanning(false);
+  };
+
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -212,18 +342,57 @@ export function POS() {
     <div className="h-full flex flex-col lg:flex-row gap-6">
       {/* Products Section */}
       <div className="flex-1 flex flex-col gap-4">
-        <div className="flex gap-4">
-          <div className="flex-1 bg-[#0A0C10] border border-[#3A3230] p-1 flex items-center h-12">
-            <div className="px-3 text-[#7A736E]">
-              <Search className="h-5 w-5" />
+        <div className="flex flex-col gap-4">
+          <div className="flex gap-4">
+            <div className="flex-1 bg-[#0A0C10] border border-[#3A3230] p-1 flex items-center h-12">
+              <div className="px-3 text-[#7A736E]">
+                <Search className="h-5 w-5" />
+              </div>
+              <input 
+                ref={searchInputRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="bg-transparent w-full text-sm outline-none font-mono placeholder-[#3A3230] text-[#FAF7F2]" 
+                placeholder="SCAN BARCODE OR [F1] SEARCH PRODUCTS..."
+              />
+              {!isScanning && (
+                <Button 
+                  type="button"
+                  onClick={startScanner}
+                  variant="ghost"
+                  className="text-[#1D9E75] hover:text-[#1D9E75] hover:bg-[#3A3230]/50 shrink-0 h-full px-4 rounded-none"
+                  title="Scan with Camera"
+                >
+                  <Camera className="h-5 w-5" />
+                </Button>
+              )}
             </div>
-            <input 
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-transparent w-full text-sm outline-none font-mono placeholder-[#3A3230] text-[#FAF7F2]" 
-              placeholder="SCAN BARCODE OR [F1] SEARCH PRODUCTS..."
-            />
+          </div>
+          
+          <div className={`relative rounded-md overflow-hidden bg-black aspect-video md:aspect-[21/9] border border-[#FF6F00] shadow-lg max-h-[300px] ${isScanning ? 'block' : 'hidden'}`}>
+            <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" />
+            
+            {/* Scanner Overlay Frame */}
+            <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center">
+              <div className="w-64 h-32 border-2 border-[#FF6F00] rounded-lg relative overflow-hidden shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]">
+                <div className="absolute top-0 left-0 w-full h-0.5 bg-[#FF6F00] shadow-[0_0_8px_#FF6F00] animate-scan"></div>
+              </div>
+            </div>
+
+            {/* Actions & Instructions */}
+            <div className="absolute bottom-4 left-0 right-0 z-20 flex flex-col items-center gap-3">
+              <p className="text-[10px] font-mono bg-[#141210]/90 px-3 py-1.5 rounded text-[#FAF7F2] tracking-widest border border-[#3A3230]">
+                POSITION BARCODE IN FRAME
+              </p>
+              <Button 
+                type="button"
+                variant="destructive"
+                onClick={stopScanner}
+                className="bg-red-500/90 hover:bg-red-600 text-white font-mono text-xs uppercase tracking-widest px-6 h-8"
+              >
+                <X className="h-3 w-3 mr-2" /> Cancel Scanning
+              </Button>
+            </div>
           </div>
         </div>
 

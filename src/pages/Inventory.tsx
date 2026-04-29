@@ -6,10 +6,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Plus, Search, Edit2, Camera, X, Trash2, Wand2 } from 'lucide-react';
+import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/library';
+import { QRCodeSVG } from 'qrcode.react';
+
+import { useReactToPrint } from 'react-to-print';
 
 interface Product {
   id: string;
@@ -27,8 +30,16 @@ export function Inventory() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
+  const [qrProduct, setQrProduct] = useState<Product | null>(null);
   const { role } = useAuth();
   
+  const qrPrintRef = useRef<HTMLDivElement>(null);
+  const handlePrintQR = useReactToPrint({
+    content: () => qrPrintRef.current,
+    documentTitle: qrProduct ? `QR_Code_${qrProduct.name}` : 'Product_QR_Code',
+  });
+
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
   // Form States
@@ -47,6 +58,14 @@ export function Inventory() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const canEdit = role === 'SUPER_ADMIN' || role === 'STORE_MANAGER';
+
+  useEffect(() => {
+    return () => {
+      if (codeReader.current) {
+        codeReader.current.reset();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
@@ -94,22 +113,77 @@ export function Inventory() {
     setBarcode(timestamp);
   };
 
-  const startScanner = async () => {
-    setIsScanning(true);
+  const playBeep = () => {
     try {
-      const videoInputDevices = await codeReader.current.listVideoInputDevices();
-      const selectedDeviceId = videoInputDevices[0].deviceId;
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
       
-      codeReader.current.decodeFromVideoDevice(selectedDeviceId, videoRef.current, (result, err) => {
-        if (result) {
-          setBarcode(result.getText());
-          toast.success('Barcode scanned successfully!');
-          stopScanner();
-        }
-      });
-    } catch (err) {
-      console.error(err);
-      toast.error('Could not start camera. Please check permissions.');
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      oscillator.type = 'sine';
+      oscillator.frequency.value = 800;
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      
+      oscillator.start();
+      setTimeout(() => oscillator.stop(), 100);
+    } catch (e) {
+      console.error("Audio beep failed", e);
+    }
+  };
+
+  const startScanner = async () => {
+    if (!videoRef.current) {
+      toast.error('Scanner initialized improperly.');
+      return;
+    }
+    setIsScanning(true);
+    
+    const handleResult = (result: any, error: any) => {
+      if (result) {
+        playBeep();
+        setBarcode(result.getText());
+        toast.success('Barcode scanned successfully!');
+        stopScanner();
+      }
+      if (error && error.name !== 'NotFoundException') {
+        console.warn('Scanner error:', error);
+      }
+    };
+
+    try {
+      if (!codeReader.current) {
+         codeReader.current = new BrowserMultiFormatReader();
+      }
+
+      try {
+        await codeReader.current.decodeFromConstraints(
+          { video: { facingMode: 'environment' } },
+          videoRef.current,
+          handleResult
+        );
+      } catch (err: any) {
+        console.warn('Failed to start environment camera, falling back to default:', err);
+        await codeReader.current.decodeFromConstraints(
+          { video: true },
+          videoRef.current,
+          handleResult
+        );
+      }
+    } catch (err: any) {
+      console.error('Camera initialization error:', err);
+      let errorMessage = 'Could not start camera. Please check permissions.';
+      if (err?.name === 'NotAllowedError') {
+        errorMessage = 'Camera access was denied. Please grant permissions in your browser.';
+      } else if (err?.name === 'NotFoundError') {
+        errorMessage = 'No camera found on this device.';
+      } else if (err?.name === 'NotReadableError') {
+        errorMessage = 'Camera is already in use by another application.';
+      } else if (err?.message) {
+        errorMessage = `Camera error: ${err.message}`;
+      }
+      toast.error(errorMessage);
       setIsScanning(false);
     }
   };
@@ -242,33 +316,31 @@ export function Inventory() {
                 <DialogTitle>{editingProduct ? 'Edit Product' : 'New Product'}</DialogTitle>
               </DialogHeader>
 
-              {isScanning && (
-                <div className="relative rounded-md overflow-hidden bg-black aspect-video border border-[#FF6F00]">
-                  <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" />
-                  
-                  {/* Scanner Overlay Frame */}
-                  <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center">
-                    <div className="w-64 h-32 border-2 border-[#FF6F00] rounded-lg relative overflow-hidden shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]">
-                      <div className="absolute top-0 left-0 w-full h-0.5 bg-[#FF6F00] shadow-[0_0_8px_#FF6F00] animate-scan"></div>
-                    </div>
-                  </div>
-
-                  {/* Actions & Instructions */}
-                  <div className="absolute bottom-4 left-0 right-0 z-20 flex flex-col items-center gap-3">
-                    <p className="text-[10px] font-mono bg-[#141210]/90 px-3 py-1.5 rounded text-[#FAF7F2] tracking-widest border border-[#3A3230]">
-                      POSITION BARCODE IN FRAME
-                    </p>
-                    <Button 
-                      type="button"
-                      variant="destructive"
-                      onClick={stopScanner}
-                      className="bg-red-500/90 hover:bg-red-600 text-white font-mono text-xs uppercase tracking-widest px-6 h-8"
-                    >
-                      <X className="h-3 w-3 mr-2" /> Cancel Scanning
-                    </Button>
+              <div className={`relative rounded-md overflow-hidden bg-black aspect-video border border-[#FF6F00] ${isScanning ? 'block' : 'hidden'}`}>
+                <video ref={videoRef} className="absolute inset-0 w-full h-full object-cover" />
+                
+                {/* Scanner Overlay Frame */}
+                <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center">
+                  <div className="w-64 h-32 border-2 border-[#FF6F00] rounded-lg relative overflow-hidden shadow-[0_0_0_9999px_rgba(0,0,0,0.6)]">
+                    <div className="absolute top-0 left-0 w-full h-0.5 bg-[#FF6F00] shadow-[0_0_8px_#FF6F00] animate-scan"></div>
                   </div>
                 </div>
-              )}
+
+                {/* Actions & Instructions */}
+                <div className="absolute bottom-4 left-0 right-0 z-20 flex flex-col items-center gap-3">
+                  <p className="text-[10px] font-mono bg-[#141210]/90 px-3 py-1.5 rounded text-[#FAF7F2] tracking-widest border border-[#3A3230]">
+                    POSITION BARCODE IN FRAME
+                  </p>
+                  <Button 
+                    type="button"
+                    variant="destructive"
+                    onClick={stopScanner}
+                    className="bg-red-500/90 hover:bg-red-600 text-white font-mono text-xs uppercase tracking-widest px-6 h-8"
+                  >
+                    <X className="h-3 w-3 mr-2" /> Cancel Scanning
+                  </Button>
+                </div>
+              </div>
 
               <form onSubmit={handleSave} className="grid grid-cols-2 gap-4 py-4">
                 <div className="col-span-2 space-y-2">
@@ -452,6 +524,18 @@ export function Inventory() {
                       <Button 
                         variant="ghost" 
                         size="icon" 
+                        className="h-8 w-8 text-[#7A736E] hover:text-[#1D9E75] hover:bg-[#1D9E75]/10 mr-1"
+                        onClick={() => {
+                          setQrProduct(product);
+                          setIsQrDialogOpen(true);
+                        }}
+                        title="Generate QR Code"
+                      >
+                        <QrCode className="h-4 w-4" />
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
                         className="h-8 w-8 text-[#7A736E] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10"
                         onClick={() => openDialog(product)}
                       >
@@ -514,6 +598,67 @@ export function Inventory() {
               className="bg-red-500 hover:bg-red-600 text-white font-mono text-xs uppercase tracking-widest"
             >
               Delete Product
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* QR Code Dialog */}
+      <Dialog open={isQrDialogOpen} onOpenChange={setIsQrDialogOpen}>
+        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="text-[#FF6F00] flex items-center gap-2">
+              <QrCode className="h-5 w-5" /> Product QR Code
+            </DialogTitle>
+          </DialogHeader>
+          {qrProduct && (
+            <div className="flex flex-col items-center justify-center py-6 gap-6">
+              <div 
+                id="print-qr-section" 
+                ref={qrPrintRef}
+                className="bg-white p-6 rounded-xl shadow-lg flex flex-col items-center gap-4"
+              >
+                <div className="text-center w-full">
+                  <h3 className="text-black font-sans font-bold text-lg leading-tight truncate px-2 w-[200px]">
+                    {qrProduct.name}
+                  </h3>
+                  <p className="text-gray-500 font-mono text-xs mt-1">
+                    {qrProduct.category}
+                  </p>
+                </div>
+                <QRCodeSVG 
+                  value={qrProduct.barcode} 
+                  size={150}
+                  level="H"
+                  includeMargin={true}
+                />
+                <div className="text-center w-full">
+                  <p className="text-black font-mono text-sm font-bold tracking-[0.2em]">
+                    {qrProduct.barcode}
+                  </p>
+                  <p className="text-gray-600 font-sans text-sm font-semibold mt-1">
+                    ₱{qrProduct.price.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+              <p className="font-mono text-xs text-[#7A736E] text-center max-w-[280px]">
+                Print this QR code and attach it to the physical product to quickly scan it at the POS.
+              </p>
+          </div>
+          )}
+          <div className="flex justify-end gap-3 mt-4">
+            <Button 
+              variant="ghost" 
+              onClick={() => setIsQrDialogOpen(false)}
+              className="text-[#FAF7F2] hover:bg-[#1A1614] font-mono text-xs uppercase tracking-widest"
+            >
+              Close
+            </Button>
+            <Button 
+              onClick={() => handlePrintQR()}
+              className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest"
+            >
+              <Printer className="h-4 w-4 mr-2" /> Print QR Code
             </Button>
           </div>
         </DialogContent>
