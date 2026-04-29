@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff, Camera, X } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
@@ -222,10 +222,14 @@ export function POS() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [cart]);
 
-  const filteredProducts = products.filter(p => 
-    p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    p.barcode.includes(searchQuery)
-  );
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+
+  const filteredProducts = useMemo(() => {
+    return products.filter(p => 
+      p.name.toLowerCase().includes(deferredSearchQuery.toLowerCase()) || 
+      p.barcode.includes(deferredSearchQuery)
+    );
+  }, [products, deferredSearchQuery]);
 
   const addToCart = (product: Product) => {
     setCart(prev => {
