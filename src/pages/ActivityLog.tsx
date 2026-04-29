@@ -37,46 +37,48 @@ export function ActivityLog() {
       </div>
 
       <div className="border border-[#3A3230] bg-[#0A0C10] flex-1 overflow-hidden flex flex-col">
-        <Table>
-          <TableHeader className="bg-[#1A1614]">
-            <TableRow className="border-[#3A3230] hover:bg-transparent">
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider w-[180px]">TIMESTAMP</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">TYPE</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">OPERATOR ID</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">DETAILS</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody className="text-sm font-mono">
-            {logs.map((log) => {
-              const date = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp || Date.now());
-              return (
-                <TableRow key={log.id} className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors">
-                  <TableCell className="text-[#7A736E]">
-                    {date.toLocaleString()}
-                  </TableCell>
-                  <TableCell>
-                    <span className="text-[#7A736E]">
-                      {log.type}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-[#1D9E75] truncate max-w-[150px]" title={log.userId}>
-                    {log.userId}
-                  </TableCell>
-                  <TableCell className="text-[#FAF7F2] font-sans">
-                    {log.details}
+        <div className="overflow-x-auto flex-1">
+          <Table>
+            <TableHeader className="bg-[#1A1614]">
+              <TableRow className="border-[#3A3230] hover:bg-transparent">
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[180px]">TIMESTAMP</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">TYPE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">OPERATOR ID</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[200px]">DETAILS</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="text-sm font-mono">
+              {logs.map((log) => {
+                const date = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp || Date.now());
+                return (
+                  <TableRow key={log.id} className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors">
+                    <TableCell className="text-[#7A736E] whitespace-nowrap">
+                      {date.toLocaleString()}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <span className="text-[#7A736E]">
+                        {log.type}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-[#1D9E75] truncate max-w-[150px]" title={log.userId}>
+                      {log.userId}
+                    </TableCell>
+                    <TableCell className="text-[#FAF7F2] font-sans break-words whitespace-normal min-w-[200px]">
+                      {log.details}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {logs.length === 0 && (
+                <TableRow className="border-[#3A3230] bg-[#141210]">
+                  <TableCell colSpan={4} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
+                    NO ACTIVITY RECORDED
                   </TableCell>
                 </TableRow>
-              );
-            })}
-            {logs.length === 0 && (
-              <TableRow className="border-[#3A3230] bg-[#141210]">
-                <TableCell colSpan={4} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
-                  NO ACTIVITY RECORDED
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
     </div>
   );

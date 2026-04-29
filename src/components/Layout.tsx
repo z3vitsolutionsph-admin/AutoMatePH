@@ -44,9 +44,14 @@ export function Layout() {
         </div>
       </header>
 
-      <main className="flex-1 flex overflow-hidden">
-        {/* Side Navigation */}
-        <nav className="w-20 border-r border-[#3A3230] bg-[#0A0C10] flex flex-col items-center py-6 gap-8 shrink-0">
+      <main className="flex-1 flex flex-col sm:flex-row overflow-hidden relative">
+        {/* Main Workspace */}
+        <section className="flex-1 flex flex-col bg-[#141210] p-4 sm:p-6 overflow-hidden overflow-y-auto mb-16 sm:mb-0">
+          <Outlet />
+        </section>
+
+        {/* Side/Bottom Navigation */}
+        <nav className="fixed sm:static bottom-0 left-0 w-full sm:w-20 border-t sm:border-t-0 sm:border-r border-[#3A3230] bg-[#0A0C10] flex sm:flex-col items-center justify-around sm:justify-start px-2 py-3 sm:py-6 sm:gap-8 shrink-0 z-20">
           {navItems.filter(item => !item.roles || item.roles.includes(role || '')).map((item) => {
              const Icon = item.icon;
              const isActive = location.pathname === item.path;
@@ -64,38 +69,33 @@ export function Layout() {
                     "p-2 rounded-lg transition-colors flex items-center justify-center",
                     isActive ? "bg-[#1A1614] border border-[#FF6F00]" : "border border-transparent"
                  )}>
-                   <Icon className="w-6 h-6" />
+                   <Icon className="w-5 h-5 sm:w-6 sm:h-6" />
                  </div>
-                 <span className="text-[9px] uppercase font-bold tracking-tighter text-center">{item.label.split(' ')[0]}</span>
+                 <span className="text-[9px] uppercase font-bold tracking-tighter text-center hidden sm:block">{item.label.split(' ')[0]}</span>
                </Link>
              )
           })}
           
-          <div className="mt-auto flex flex-col gap-4">
+          <div className="sm:mt-auto flex sm:flex-col items-center gap-2 sm:gap-4 ml-auto sm:ml-0 pr-4 sm:pr-0">
              <div 
                onClick={() => setTerminalOpen(!terminalOpen)}
                className="group cursor-pointer flex flex-col items-center gap-1 text-[#1D9E75] hover:text-[#FAF7F2] transition-colors"
              >
                 <div className="p-2 border border-[#1D9E75] rounded-lg bg-[#1A1614] flex items-center justify-center">
-                   <Terminal className="w-6 h-6" />
+                   <Terminal className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
-                <span className="text-[9px] uppercase font-bold tracking-tighter text-center">AI Foresight</span>
+                <span className="text-[9px] uppercase font-bold tracking-tighter text-center hidden sm:block">AI Foresight</span>
              </div>
 
              <div 
                onClick={logout}
-               className="group cursor-pointer flex flex-col items-center gap-1 text-[#7A736E] hover:text-[#FAF7F2] transition-colors mt-4"
+               className="group cursor-pointer flex flex-col items-center gap-1 text-[#7A736E] hover:text-[#FAF7F2] transition-colors sm:mt-4"
              >
-                <LogOut className="w-6 h-6" />
-                <span className="text-[9px] uppercase font-bold tracking-tighter">Exit</span>
+                <LogOut className="w-5 h-5 sm:w-6 sm:h-6" />
+                <span className="text-[9px] uppercase font-bold tracking-tighter hidden sm:block">Exit</span>
              </div>
           </div>
         </nav>
-
-        {/* Main Workspace */}
-        <section className="flex-1 flex flex-col bg-[#141210] p-6 overflow-hidden overflow-y-auto">
-          <Outlet />
-        </section>
       </main>
 
       <footer className="h-10 bg-[#1A1614] border-t border-[#3A3230] flex items-center px-6 text-[10px] font-mono tracking-widest shrink-0 hidden sm:flex">

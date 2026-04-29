@@ -1,18 +1,21 @@
-import React, { useState, useEffect, useRef, useMemo, useDeferredValue } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, auth } from '../lib/firebase';
 import { collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { formatCurrency } from '../lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer } from 'lucide-react';
+import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer, AlertTriangle, Download } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { QRCodeSVG } from 'qrcode.react';
+import Fuse from 'fuse.js';
 
 import { useReactToPrint } from 'react-to-print';
+import { useDebounce } from '../hooks/useDebounce';
 
 interface Product {
   id: string;
@@ -23,12 +26,16 @@ interface Product {
   stock: number;
   minStock: number;
   category: string;
+  description?: string;
+  location?: string;
 }
 
 export function Inventory() {
   const [products, setProducts] = useState<Product[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isDetailsDialogOpen, setIsDetailsDialogOpen] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
@@ -36,7 +43,7 @@ export function Inventory() {
   
   const qrPrintRef = useRef<HTMLDivElement>(null);
   const handlePrintQR = useReactToPrint({
-    content: () => qrPrintRef.current,
+    contentRef: qrPrintRef,
     documentTitle: qrProduct ? `QR_Code_${qrProduct.name}` : 'Product_QR_Code',
   });
 
@@ -50,6 +57,8 @@ export function Inventory() {
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('0');
   const [category, setCategory] = useState('');
+  const [description, setDescription] = useState('');
+  const [locationStr, setLocationStr] = useState('');
 
   // Scanner States
   const [isScanning, setIsScanning] = useState(false);
@@ -90,6 +99,8 @@ export function Inventory() {
       setStock(product.stock.toString());
       setMinStock(product.minStock.toString());
       setCategory(product.category);
+      setDescription(product.description || '');
+      setLocationStr(product.location || '');
     } else {
       setEditingProduct(null);
       setBarcode('');
@@ -99,8 +110,11 @@ export function Inventory() {
       setStock('');
       setMinStock('0');
       setCategory('');
+      setDescription('');
+      setLocationStr('');
     }
     setIsDialogOpen(true);
+    setIsDetailsDialogOpen(false);
   };
 
   const closeDialog = () => {
@@ -229,6 +243,8 @@ export function Inventory() {
       stock: parseInt(stock, 10),
       minStock: parseInt(minStock, 10) || 0,
       category,
+      description,
+      location: locationStr,
     };
 
     try {
@@ -287,17 +303,72 @@ export function Inventory() {
     }
   };
 
-  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
 
   const categories = useMemo(() => Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort(), [products]);
 
   const filteredProducts = useMemo(() => {
-    return products.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(deferredSearchQuery.toLowerCase()) || p.barcode.includes(deferredSearchQuery);
-      const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
-      return matchesSearch && matchesCategory;
-    });
-  }, [products, deferredSearchQuery, selectedCategory]);
+    let result = products;
+
+    if (selectedCategory !== 'All') {
+      result = result.filter(p => p.category === selectedCategory);
+    }
+
+    if (debouncedSearchQuery) {
+      const fuse = new Fuse(result, {
+        keys: ['name', 'barcode', 'category'],
+        threshold: 0.3,
+      });
+      result = fuse.search(debouncedSearchQuery).map(res => res.item);
+    }
+
+    return result;
+  }, [products, debouncedSearchQuery, selectedCategory]);
+
+  const lowStockProducts = useMemo(() => {
+    return products.filter(p => p.stock <= p.minStock && p.stock > 0);
+  }, [products]);
+
+  const outOfStockProducts = useMemo(() => {
+    return products.filter(p => p.stock === 0);
+  }, [products]);
+
+  const handleDownloadCSV = () => {
+    if (products.length === 0) {
+      toast.error('No products to export');
+      return;
+    }
+
+    const headers = ['Name', 'Barcode', 'Category', 'Price', 'Cost', 'Current Stock', 'Min Stock', 'Total Retail Value'];
+    const csvContent = [
+      headers.join(','),
+      ...products.map(p => {
+        return [
+          `"${p.name.replace(/"/g, '""')}"`,
+          `"${p.barcode}"`,
+          `"${p.category}"`,
+          p.price,
+          p.cost,
+          p.stock,
+          p.minStock,
+          (p.price * p.stock).toFixed(2)
+        ].join(',');
+      })
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `inventory_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    toast.success('Inventory exported successfully');
+  };
 
   return (
     <div className="space-y-6">
@@ -307,8 +378,13 @@ export function Inventory() {
           <p className="text-sm font-mono text-[#7A736E]">Real-time stock tracking and adjustments</p>
         </div>
         
-        {canEdit && (
-          <Dialog open={isDialogOpen} onOpenChange={isOpen => {
+        <div className="flex items-center gap-2">
+          <Button onClick={handleDownloadCSV} variant="outline" className="border-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2] font-mono text-xs">
+            <Download className="mr-2 h-4 w-4" /> Export CSV
+          </Button>
+
+          {canEdit && (
+            <Dialog open={isDialogOpen} onOpenChange={isOpen => {
             if (!isOpen) closeDialog();
             else openDialog();
           }}>
@@ -449,6 +525,24 @@ export function Inventory() {
                     className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
                   />
                 </div>
+                <div className="col-span-2 space-y-2">
+                  <label className="text-xs font-mono text-[#7A736E] uppercase">Description</label>
+                  <Input 
+                    name="description" 
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                  />
+                </div>
+                <div className="col-span-2 space-y-2">
+                  <label className="text-xs font-mono text-[#7A736E] uppercase">Location</label>
+                  <Input 
+                    name="location" 
+                    value={locationStr}
+                    onChange={(e) => setLocationStr(e.target.value)}
+                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                  />
+                </div>
                 <div className="col-span-2 mt-4">
                   <Button 
                     type="submit" 
@@ -461,8 +555,36 @@ export function Inventory() {
               </form>
             </DialogContent>
           </Dialog>
-        )}
+          )}
+        </div>
       </div>
+
+      {(lowStockProducts.length > 0 || outOfStockProducts.length > 0) && (
+        <div className="flex flex-col gap-2 p-4 border border-[#3A3230] bg-[#141210]">
+          <div className="flex items-center gap-2 text-[#FAF7F2] font-bold text-xs tracking-widest uppercase mb-1 font-mono">
+            <AlertTriangle className="h-4 w-4 text-[#FF6F00]" />
+            Inventory Alerts
+          </div>
+          {outOfStockProducts.length > 0 && (
+            <div className="flex items-start gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-sm text-xs font-mono">
+               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse mt-1 shrink-0"></span>
+               <div>
+                 <span className="font-bold tracking-wider">{outOfStockProducts.length} CRITICAL ERRORS</span>
+                 <p className="mt-1 opacity-80 leading-relaxed">Items totally depleted. Restock immediately.</p>
+               </div>
+            </div>
+          )}
+          {lowStockProducts.length > 0 && (
+            <div className="flex items-start gap-3 px-4 py-3 bg-[#FF6F00]/10 border border-[#FF6F00]/20 text-[#FF6F00] rounded-sm text-xs font-mono">
+               <span className="w-2 h-2 rounded-full bg-[#FF6F00] animate-pulse mt-1 shrink-0"></span>
+               <div>
+                 <span className="font-bold tracking-wider">{lowStockProducts.length} WARNINGS</span>
+                 <p className="mt-1 opacity-80 leading-relaxed">Items below minimum stock threshold.</p>
+               </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex gap-4">
         <div className="flex bg-[#0A0C10] border border-[#3A3230] p-1 items-center w-full max-w-md h-12">
@@ -489,90 +611,159 @@ export function Inventory() {
       </div>
 
       <div className="border border-[#3A3230] bg-[#0A0C10] flex-1 overflow-hidden flex flex-col">
-        <Table>
-          <TableHeader className="bg-[#1A1614]">
-            <TableRow className="border-[#3A3230] hover:bg-transparent">
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider w-[100px]">BARCODE</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">PRODUCT NAME</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">CATEGORY</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider text-right">PRICE</TableHead>
-              <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider text-right">STOCK</TableHead>
-              {canEdit && <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider text-right w-[80px]">ACTIONS</TableHead>}
-            </TableRow>
-          </TableHeader>
-          <TableBody className="text-sm font-mono">
-            {filteredProducts.map((product) => (
-              <TableRow key={product.id} className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors">
-                <TableCell className="text-[#7A736E]">{product.barcode}</TableCell>
-                <TableCell className="text-[#FAF7F2] font-sans">{product.name}</TableCell>
-                <TableCell>
-                  <span className="text-[#7A736E]">
-                    {product.category}
-                  </span>
-                </TableCell>
-                <TableCell className="text-right text-[#1D9E75]">₱{product.price.toFixed(2)}</TableCell>
-                <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    {product.stock <= product.minStock && product.stock > 0 && (
-                      <span className="w-2 h-2 rounded-full bg-[#FF6F00] animate-pulse" title="Low Stock"></span>
-                    )}
-                    {product.stock === 0 && (
-                      <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="Out of Stock"></span>
-                    )}
-                    <span className="text-[#FAF7F2]">{product.stock}</span>
-                  </div>
-                </TableCell>
-                {canEdit && (
-                  <TableCell className="text-right">
-                    <div className="flex items-center justify-end">
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-8 w-8 text-[#7A736E] hover:text-[#1D9E75] hover:bg-[#1D9E75]/10 mr-1"
-                        onClick={() => {
-                          setQrProduct(product);
-                          setIsQrDialogOpen(true);
-                        }}
-                        title="Generate QR Code"
-                      >
-                        <QrCode className="h-4 w-4" />
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-8 w-8 text-[#7A736E] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10"
-                        onClick={() => openDialog(product)}
-                      >
-                        <Edit2 className="h-4 w-4" />
-                      </Button>
-                      {role === 'SUPER_ADMIN' && (
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="h-8 w-8 text-[#7A736E] hover:text-red-500 hover:bg-red-500/10 ml-1"
-                          onClick={() => {
-                            setProductToDelete(product);
-                            setIsDeleteDialogOpen(true);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+        <div className="overflow-x-auto flex-1">
+          <Table>
+            <TableHeader className="bg-[#1A1614]">
+              <TableRow className="border-[#3A3230] hover:bg-transparent">
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[100px]">BARCODE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[150px]">PRODUCT NAME</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">CATEGORY</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider text-right">PRICE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider text-right">STOCK</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody className="text-sm font-mono">
+              {filteredProducts.map((product) => (
+                <TableRow 
+                  key={product.id} 
+                  className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors cursor-pointer"
+                  onClick={() => {
+                    setSelectedProduct(product);
+                    setIsDetailsDialogOpen(true);
+                  }}
+                >
+                  <TableCell className="text-[#7A736E] whitespace-nowrap">{product.barcode}</TableCell>
+                  <TableCell className="text-[#FAF7F2] font-sans whitespace-nowrap">{product.name}</TableCell>
+                  <TableCell>
+                    <span className="text-[#7A736E] whitespace-nowrap">
+                      {product.category}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-right text-[#1D9E75] whitespace-nowrap">₱{formatCurrency(product.price)}</TableCell>
+                  <TableCell className="text-right whitespace-nowrap">
+                    <div className="flex items-center justify-end gap-2">
+                      {product.stock <= product.minStock && product.stock > 0 && (
+                        <span className="w-2 h-2 rounded-full bg-[#FF6F00] animate-pulse" title="Low Stock"></span>
                       )}
+                      {product.stock === 0 && (
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="Out of Stock"></span>
+                      )}
+                      <span className="text-[#FAF7F2]">{product.stock}</span>
                     </div>
                   </TableCell>
-                )}
-              </TableRow>
-            ))}
-            {filteredProducts.length === 0 && (
-             <TableRow className="border-[#3A3230] bg-[#141210]">
-               <TableCell colSpan={6} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
-                  NO PRODUCTS FOUND
-               </TableCell>
-             </TableRow>
-            )}
-          </TableBody>
-        </Table>
+                </TableRow>
+              ))}
+              {filteredProducts.length === 0 && (
+               <TableRow className="border-[#3A3230] bg-[#141210]">
+                 <TableCell colSpan={5} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
+                    NO PRODUCTS FOUND
+                 </TableCell>
+               </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </div>
       </div>
+
+      <Dialog open={isDetailsDialogOpen} onOpenChange={setIsDetailsDialogOpen}>
+        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle className="text-[#FF6F00] uppercase tracking-widest flex justify-between items-center pr-6">
+              Product Details
+              <div className="flex items-center gap-2">
+                {canEdit && (
+                  <>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 text-[#7A736E] hover:text-[#1D9E75] hover:bg-[#1D9E75]/10"
+                      onClick={() => {
+                        setIsDetailsDialogOpen(false);
+                        if (selectedProduct) {
+                          setQrProduct(selectedProduct);
+                          setIsQrDialogOpen(true);
+                        }
+                      }}
+                      title="Generate QR Code"
+                    >
+                      <QrCode className="h-4 w-4" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 text-[#7A736E] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10"
+                      onClick={() => openDialog(selectedProduct!)}
+                      title="Edit Product"
+                    >
+                      <Edit2 className="h-4 w-4" />
+                    </Button>
+                  </>
+                )}
+                {role === 'SUPER_ADMIN' && (
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-8 w-8 text-[#7A736E] hover:text-red-500 hover:bg-red-500/10"
+                    onClick={() => {
+                      setIsDetailsDialogOpen(false);
+                      if (selectedProduct) {
+                        setProductToDelete(selectedProduct);
+                        setIsDeleteDialogOpen(true);
+                      }
+                    }}
+                    title="Delete Product"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+            </DialogTitle>
+          </DialogHeader>
+          
+          {selectedProduct && (
+            <div className="py-4 space-y-4 font-mono">
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Name</span>
+                <span className="text-[#FAF7F2] font-sans font-bold">{selectedProduct.name}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Barcode</span>
+                <span className="text-[#FAF7F2]">{selectedProduct.barcode}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Category</span>
+                <span className="text-[#FAF7F2]">{selectedProduct.category}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Price</span>
+                <span className="text-[#1D9E75] font-bold">₱{formatCurrency(selectedProduct.price)}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Cost</span>
+                <span className="text-[#FF6F00]">₱{selectedProduct.cost ? formatCurrency(selectedProduct.cost) : '0.00'}</span>
+              </div>
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Stock</span>
+                <span className="text-[#FAF7F2]">{selectedProduct.stock} (Min: {selectedProduct.minStock})</span>
+              </div>
+              
+              {selectedProduct.location && (
+                <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                  <span className="text-[#7A736E] text-xs uppercase tracking-widest">Location</span>
+                  <span className="text-[#FAF7F2]">{selectedProduct.location}</span>
+                </div>
+              )}
+              
+              <div className="pt-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest block mb-1">Description</span>
+                <p className="text-[#FAF7F2] font-sans text-sm whitespace-pre-wrap leading-relaxed">
+                  {selectedProduct.description || 'No description provided.'}
+                </p>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
         <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[425px]">
@@ -641,7 +832,7 @@ export function Inventory() {
                     {qrProduct.barcode}
                   </p>
                   <p className="text-gray-600 font-sans text-sm font-semibold mt-1">
-                    ₱{qrProduct.price.toFixed(2)}
+                    ₱{formatCurrency(qrProduct.price)}
                   </p>
                 </div>
               </div>
