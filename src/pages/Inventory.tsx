@@ -41,12 +41,21 @@ export function Inventory() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [isBatchQrDialogOpen, setIsBatchQrDialogOpen] = useState(false);
   const { role } = useAuth();
   
   const qrPrintRef = useRef<HTMLDivElement>(null);
+  const batchQrPrintRef = useRef<HTMLDivElement>(null);
+  
   const handlePrintQR = useReactToPrint({
     contentRef: qrPrintRef,
     documentTitle: qrProduct ? `QR_Code_${qrProduct.name}` : 'Product_QR_Code',
+  });
+
+  const handlePrintBatchQR = useReactToPrint({
+    contentRef: batchQrPrintRef,
+    documentTitle: 'Batch_Product_QR_Codes',
   });
 
   const handleDownloadQRPDF = async () => {
@@ -75,6 +84,49 @@ export function Inventory() {
     } catch (error) {
       console.error('Failed to generate PDF:', error);
       toast.error('Failed to generate PDF');
+    }
+  };
+
+  const handleDownloadBatchQRPDF = async () => {
+    if (!batchQrPrintRef.current || selectedProductIds.length === 0) return;
+    
+    try {
+      // Temporarily ensure the ref is visible for toPng to capture correctly.
+      // (Using a grid or layout inside the dialog should work)
+      const dataUrl = await toPng(batchQrPrintRef.current, { pixelRatio: 2 });
+      
+      // We will export it as A4 format.
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4', 
+      });
+      
+      const imgProps = pdf.getImageProperties(dataUrl);
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      
+      // If it's longer than a page, it might just run off. A better approach for multi-page 
+      // could be complex with html-to-image. For basic batch, we just put it on one long page or let it scale.
+      // To support multiple pages properly, generating a PDF from an image that is taller than A4 just cuts it off.
+      // So we'll adjust the height of the PDF to fit the image if it's tall.
+      if (pdfHeight > pdf.internal.pageSize.getHeight()) {
+        const customPdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: [210, Math.max(297, pdfHeight + 20)]
+        });
+        customPdf.addImage(dataUrl, 'PNG', 0, 10, pdfWidth, pdfHeight);
+        customPdf.save(`Batch_QR_Codes.pdf`);
+      } else {
+        pdf.addImage(dataUrl, 'PNG', 0, 10, pdfWidth, pdfHeight);
+        pdf.save(`Batch_QR_Codes.pdf`);
+      }
+      
+      toast.success('Batch PDF downloaded successfully');
+    } catch (error) {
+      console.error('Failed to generate batch PDF:', error);
+      toast.error('Failed to generate Batch PDF');
     }
   };
 
@@ -356,6 +408,21 @@ export function Inventory() {
     return result;
   }, [products, debouncedSearchQuery, selectedCategory]);
 
+  const handleToggleSelectAll = () => {
+    if (selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0) {
+      setSelectedProductIds([]);
+    } else {
+      setSelectedProductIds(filteredProducts.map(p => p.id));
+    }
+  };
+
+  const handleToggleSelect = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedProductIds(prev => 
+      prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
+    );
+  };
+
   const lowStockProducts = useMemo(() => {
     return products.filter(p => p.stock <= p.minStock && p.stock > 0);
   }, [products]);
@@ -410,6 +477,11 @@ export function Inventory() {
         </div>
         
         <div className="flex items-center gap-2">
+          {selectedProductIds.length > 0 && (
+            <Button onClick={() => setIsBatchQrDialogOpen(true)} variant="outline" className="border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs">
+              <QrCode className="mr-2 h-4 w-4" /> Generate Batch QR ({selectedProductIds.length})
+            </Button>
+          )}
           <Button onClick={handleDownloadCSV} variant="outline" className="border-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2] font-mono text-xs">
             <Download className="mr-2 h-4 w-4" /> Export CSV
           </Button>
@@ -646,6 +718,14 @@ export function Inventory() {
           <Table>
             <TableHeader className="bg-[#1A1614]">
               <TableRow className="border-[#3A3230] hover:bg-transparent">
+                <TableHead className="w-[40px] px-4">
+                  <input
+                    type="checkbox"
+                    className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
+                    checked={selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0}
+                    onChange={handleToggleSelectAll}
+                  />
+                </TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[100px]">BARCODE</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[150px]">PRODUCT NAME</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">CATEGORY</TableHead>
@@ -663,6 +743,14 @@ export function Inventory() {
                     setIsDetailsDialogOpen(true);
                   }}
                 >
+                  <TableCell className="w-[40px] px-4" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
+                      checked={selectedProductIds.includes(product.id)}
+                      onChange={(e) => handleToggleSelect(product.id, e as any)}
+                    />
+                  </TableCell>
                   <TableCell className="text-[#7A736E] whitespace-nowrap">{product.barcode}</TableCell>
                   <TableCell className="text-[#FAF7F2] font-sans whitespace-nowrap">{product.name}</TableCell>
                   <TableCell>
@@ -892,6 +980,78 @@ export function Inventory() {
               className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest sm:flex-1"
             >
               <Printer className="h-4 w-4 mr-2" /> Print QR Code
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Batch QR Code Dialog */}
+      <Dialog open={isBatchQrDialogOpen} onOpenChange={setIsBatchQrDialogOpen}>
+        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[800px] max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-[#FF6F00] flex items-center gap-2">
+              <QrCode className="h-5 w-5" /> Batch QR Codes ({selectedProductIds.length})
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto p-4 bg-[#0A0C10] border border-[#3A3230] rounded-md custom-scrollbar">
+            <div 
+              ref={batchQrPrintRef}
+              className="bg-white p-6 grid grid-cols-2 md:grid-cols-3 gap-6"
+            >
+              <style type="text/css" media="print">
+                {`
+                  @page { size: auto; margin: 10mm; }
+                  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+                `}
+              </style>
+              {products.filter(p => selectedProductIds.includes(p.id)).map(product => (
+                <div key={product.id} className="flex flex-col items-center justify-center p-4 border border-dashed border-gray-300 rounded-lg">
+                  <div className="text-center w-full mb-3">
+                    <h3 className="text-black font-sans font-bold text-sm leading-tight truncate px-1 w-full">
+                      {product.name}
+                    </h3>
+                    <p className="text-gray-500 font-mono text-[10px] mt-1">
+                      {product.category}
+                    </p>
+                  </div>
+                  <QRCodeSVG 
+                    value={product.barcode} 
+                    size={100}
+                    level="Q"
+                    includeMargin={false}
+                  />
+                  <div className="text-center w-full mt-3">
+                    <p className="text-black font-mono text-xs font-bold tracking-[0.1em]">
+                      {product.barcode}
+                    </p>
+                    <p className="text-gray-600 font-sans text-xs font-semibold mt-1">
+                      ₱{formatCurrency(product.price)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t border-[#3A3230]">
+            <Button 
+              variant="ghost" 
+              onClick={() => setIsBatchQrDialogOpen(false)}
+              className="text-[#FAF7F2] hover:bg-[#1A1614] font-mono text-xs uppercase tracking-widest sm:flex-1"
+            >
+              Close
+            </Button>
+            <Button 
+              onClick={handleDownloadBatchQRPDF}
+              variant="outline"
+              className="border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs uppercase tracking-widest sm:flex-1"
+            >
+              <Download className="h-4 w-4 mr-2" /> Download PDF
+            </Button>
+            <Button 
+              onClick={() => handlePrintBatchQR()}
+              className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest sm:flex-1"
+            >
+              <Printer className="h-4 w-4 mr-2" /> Print Batch
             </Button>
           </div>
         </DialogContent>
