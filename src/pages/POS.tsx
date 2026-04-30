@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import { db, auth } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
@@ -64,22 +64,38 @@ export function POS() {
         if (pendingTxs.length > 0) {
           setIsSyncing(true);
           toast.success(`Syncing ${pendingTxs.length} offline transactions...`);
-          let successCount = 0;
-          for (const tx of pendingTxs) {
-            try {
-              await addDoc(collection(db, 'transactions'), {
+
+          let totalSuccessCount = 0;
+          const BATCH_SIZE = 500;
+
+          for (let i = 0; i < pendingTxs.length; i += BATCH_SIZE) {
+            const chunk = pendingTxs.slice(i, i + BATCH_SIZE);
+            const batch = writeBatch(db);
+            const chunkIds: number[] = [];
+
+            for (const tx of chunk) {
+              const newDocRef = doc(collection(db, 'transactions'));
+              batch.set(newDocRef, {
                 ...tx.transactionData,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
               });
-              await dbLocal.transactions.update(tx.id!, { status: 'synced' });
-              successCount++;
+              if (tx.id) chunkIds.push(tx.id);
+            }
+
+            try {
+              await batch.commit();
+              await dbLocal.transactions.bulkUpdate(
+                chunkIds.map(id => ({ key: id, changes: { status: 'synced' as const } }))
+              );
+              totalSuccessCount += chunk.length;
             } catch (err) {
-              console.error("Failed to sync specific tx:", err);
+              console.error("Failed to sync batch:", err);
             }
           }
+
           setIsSyncing(false);
-          toast.success(`Offline synchronization complete. ${successCount}/${pendingTxs.length} synced successfully.`);
+          toast.success(`Offline synchronization complete. ${totalSuccessCount}/${pendingTxs.length} synced successfully.`);
         }
       } catch (e) {
         setIsSyncing(false);
