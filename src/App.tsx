@@ -12,6 +12,7 @@ import { POS } from './pages/POS';
 import { Inventory } from './pages/Inventory';
 import { Dashboard } from './pages/Dashboard';
 import { ActivityLog } from './pages/ActivityLog';
+import { UserManagement } from './pages/UserManagement';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { user, loading } = useAuth();
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="pos" element={<POS />} />
             <Route path="inventory" element={<Inventory />} />
             <Route path="activityLog" element={<ActivityLog />} />
+            <Route path="users" element={<UserManagement />} />
           </Route>
         </Routes>
       </BrowserRouter>

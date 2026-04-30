@@ -4,7 +4,7 @@ import { Navigate } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
-import { ShoppingCart, LogIn, UserPlus } from 'lucide-react';
+import { ShoppingCart, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 
@@ -13,9 +13,29 @@ export function Login() {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
-  const [role, setRole] = useState('CASHIER');
+  // role defaults to STORE_MANAGER for public registration 
+  const role = 'STORE_MANAGER';
   const [isLoading, setIsLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+
+  const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [confirmPasswordError, setConfirmPasswordError] = useState('');
+  const [nameError, setNameError] = useState('');
+
+  React.useEffect(() => {
+    setEmailError('');
+    setPasswordError('');
+    setConfirmPasswordError('');
+    setNameError('');
+    setEmail('');
+    setPassword('');
+    setConfirmPassword('');
+    setName('');
+  }, [isLogin]);
 
   if (loading) return null;
   if (user) return <Navigate to="/" replace />;
@@ -33,20 +53,82 @@ export function Login() {
     }
   };
 
+  const handleEmailChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setEmail(val);
+    if (!val) setEmailError('Email is required');
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) setEmailError('Please enter a valid email address');
+    else setEmailError('');
+  };
+
+  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setPassword(val);
+    if (!val) setPasswordError('Password is required');
+    else if (val.length < 6) setPasswordError('Password must be at least 6 characters long');
+    else setPasswordError('');
+    
+    if (!isLogin && confirmPassword && val !== confirmPassword) {
+      setConfirmPasswordError('Passwords do not match');
+    } else if (!isLogin && confirmPassword && val === confirmPassword) {
+      setConfirmPasswordError('');
+    }
+  };
+
+  const handleConfirmPasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setConfirmPassword(val);
+    if (!val) setConfirmPasswordError('Please confirm your password');
+    else if (val !== password) setConfirmPasswordError('Passwords do not match');
+    else setConfirmPasswordError('');
+  };
+
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setName(val);
+    if (!isLogin && !val.trim()) setNameError('Full Name is required for registration');
+    else setNameError('');
+  };
+
   const validateForm = () => {
-    if (!email || !password) {
-      toast.error('Email and password are required');
-      return false;
+    let isValid = true;
+    
+    if (!email) {
+      setEmailError('Email is required');
+      isValid = false;
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setEmailError('Please enter a valid email address');
+      isValid = false;
     }
-    if (!isLogin && !name) {
-      toast.error('Name is required for registration');
-      return false;
+
+    if (!password) {
+      setPasswordError('Password is required');
+      isValid = false;
+    } else if (password.length < 6) {
+      setPasswordError('Password must be at least 6 characters long');
+      isValid = false;
     }
-    if (password.length < 6) {
-      toast.error('Password must be at least 6 characters');
-      return false;
+
+    if (!isLogin) {
+      if (!name.trim()) {
+        setNameError('Full Name is required for registration');
+        isValid = false;
+      }
+
+      if (!confirmPassword) {
+        setConfirmPasswordError('Please confirm your password');
+        isValid = false;
+      } else if (confirmPassword !== password) {
+        setConfirmPasswordError('Passwords do not match');
+        isValid = false;
+      }
     }
-    return true;
+
+    if (!isValid) {
+      toast.error('Please fix the errors in the form before submitting');
+    }
+
+    return isValid;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -55,11 +137,14 @@ export function Login() {
 
     try {
       setIsLoading(true);
+      const cleanEmail = email.trim();
+      const cleanName = name.trim();
+      
       if (isLogin) {
-        await signIn(email, password);
+        await signIn(cleanEmail, password);
         toast.success('Successfully logged in');
       } else {
-        await signUp(email, password, name, role);
+        await signUp(cleanEmail, password, cleanName, role);
         toast.success('Successfully registered and logged in');
       }
     } catch (error: any) {
@@ -67,10 +152,18 @@ export function Login() {
       let errorMessage = error.message || 'Authentication failed';
       if (errorMessage.includes('invalid-credential')) {
         errorMessage = 'Invalid email or password';
+        setEmailError('Invalid email or password');
+        setPasswordError('Invalid email or password');
+      } else if (errorMessage.includes('auth/user-not-found') || errorMessage.includes('auth/wrong-password')) {
+        errorMessage = 'Invalid email or password';
+        setEmailError('Invalid email or password');
+        setPasswordError('Invalid email or password');
       } else if (errorMessage.includes('email-already-in-use')) {
         errorMessage = 'An account with this email already exists';
+        setEmailError('Email already in use');
       } else if (errorMessage.includes('weak-password')) {
-        errorMessage = 'Password is too weak';
+        errorMessage = 'Password must be at least 6 characters';
+        setPasswordError('Password too weak');
       }
       toast.error(errorMessage);
     } finally {
@@ -134,21 +227,13 @@ export function Login() {
                         type="text"
                         placeholder="John Doe"
                         value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00]"
+                        onChange={handleNameChange}
+                        disabled={isLoading}
+                        className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] ${nameError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
                       />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Requested Role</label>
-                      <select
-                        value={role}
-                        onChange={(e) => setRole(e.target.value)}
-                        className="flex h-10 w-full rounded-md border border-[#3A3230] bg-[#0A0C10] px-3 py-2 text-sm text-[#FAF7F2] font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6F00] focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <option value="CASHIER">CASHIER</option>
-                        <option value="STORE_MANAGER">STORE MANAGER</option>
-                        <option value="SUPER_ADMIN">SUPER ADMIN</option>
-                      </select>
+                      {nameError && (
+                        <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{nameError}</p>
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -160,21 +245,73 @@ export function Login() {
                   type="email"
                   placeholder="admin@automate.ph"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00]"
+                  onChange={handleEmailChange}
+                  disabled={isLoading}
+                  className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] ${emailError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
                 />
+                {emailError && (
+                  <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{emailError}</p>
+                )}
               </div>
 
               <div className="space-y-1.5">
                 <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00]"
-                />
+                <div className="relative">
+                  <Input
+                    type={showPassword ? "text" : "password"}
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={handlePasswordChange}
+                    disabled={isLoading}
+                    className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] pr-10 ${passwordError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
+                  />
+                  <button 
+                    type="button" 
+                    onClick={() => setShowPassword(!showPassword)}
+                    disabled={isLoading}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A736E] hover:text-[#FAF7F2] transition-colors disabled:opacity-50"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                {passwordError && (
+                  <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{passwordError}</p>
+                )}
               </div>
+
+              <AnimatePresence mode="popLayout">
+                {!isLogin && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, y: -10 }}
+                    animate={{ opacity: 1, height: 'auto', y: 0 }}
+                    exit={{ opacity: 0, height: 0, y: -10 }}
+                    className="space-y-1.5 overflow-hidden"
+                  >
+                    <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Confirm Password</label>
+                    <div className="relative">
+                      <Input
+                        type={showConfirmPassword ? "text" : "password"}
+                        placeholder="••••••••"
+                        value={confirmPassword}
+                        onChange={handleConfirmPasswordChange}
+                        disabled={isLoading}
+                        className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] pr-10 ${confirmPasswordError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
+                      />
+                      <button 
+                        type="button" 
+                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                        disabled={isLoading}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A736E] hover:text-[#FAF7F2] transition-colors disabled:opacity-50"
+                      >
+                        {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {confirmPasswordError && (
+                      <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{confirmPasswordError}</p>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <Button 
                 type="submit" 

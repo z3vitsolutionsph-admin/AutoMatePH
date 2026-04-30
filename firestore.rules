@@ -18,7 +18,7 @@ service cloud.firestore {
     // Bootstrapped Admin: Your user email is given admin role for testing.
     function isSuperAdmin() {
       return isSignedIn() && (
-        request.auth.token.email in ["z3vitsolutions.ph@gmail.com", "a.binang@gmail.com"] ||
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com"] ||
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "SUPER_ADMIN"
       );
@@ -26,15 +26,23 @@ service cloud.firestore {
     
     function isStoreManager() {
       return isSignedIn() && (
-        request.auth.token.email in ["z3vitsolutions.ph@gmail.com", "a.binang@gmail.com"] ||
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com"] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["STORE_MANAGER", "SUPER_ADMIN"])
       );
     }
     
+    function isInventoryClerkOrHigher() {
+      return isSignedIn() && (
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com"] ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["INVENTORY_CLERK", "STORE_MANAGER", "SUPER_ADMIN"])
+      );
+    }
+    
     function isCashierOrHigher() {
       return isSignedIn() && (
-        request.auth.token.email in ["z3vitsolutions.ph@gmail.com", "a.binang@gmail.com"] ||
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com"] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["CASHIER", "STORE_MANAGER", "SUPER_ADMIN"])
       );
@@ -46,7 +54,7 @@ service cloud.firestore {
       return data.keys().hasAll(["email", "name", "role", "createdAt", "updatedAt", "isActive"])
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 100
         && data.name is string && data.name.size() > 0 && data.name.size() <= 100
-        && data.role in ["SUPER_ADMIN", "STORE_MANAGER", "CASHIER"]
+        && data.role in ["SUPER_ADMIN", "STORE_MANAGER", "CASHIER", "INVENTORY_CLERK"]
         && (data.get('pin', '') is string) // optional or strictly string
         && data.createdAt is timestamp
         && data.updatedAt is timestamp

@@ -90,7 +90,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
     const firebaseUser = userCredential.user;
     
-    const validRole = ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER'].includes(selectedRole) ? selectedRole : 'CASHIER';
+    const validRole = ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER', 'INVENTORY_CLERK'].includes(selectedRole) ? selectedRole : 'CASHIER';
 
     const userDocRef = doc(db, 'users', firebaseUser.uid);
     await setDoc(userDocRef, {
