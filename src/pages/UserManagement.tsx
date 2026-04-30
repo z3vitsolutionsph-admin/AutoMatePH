@@ -27,7 +27,10 @@ interface UserData {
 let secondaryApp: any = null;
 let secondaryAuth: any = null;
 try {
-  secondaryApp = initializeApp(firebaseConfig, "SecondaryAuthApp-" + Date.now());
+  secondaryApp = initializeApp({
+    ...firebaseConfig,
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY
+  }, "SecondaryAuthApp-" + Date.now());
   secondaryAuth = getAuth(secondaryApp);
 } catch (e) {
   console.error("Failed to init secondary app", e);
