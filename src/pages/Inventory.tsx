@@ -41,7 +41,9 @@ export function Inventory() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
-  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  // BOLT OPTIMIZATION: Using a Set for O(1) lookup performance during table rendering
+  // This prevents O(N^2) complexity when many items are selected in a large list.
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
   const [isBatchQrDialogOpen, setIsBatchQrDialogOpen] = useState(false);
   const { role } = useAuth();
   
@@ -88,7 +90,7 @@ export function Inventory() {
   };
 
   const handleDownloadBatchQRPDF = async () => {
-    if (!batchQrPrintRef.current || selectedProductIds.length === 0) return;
+    if (!batchQrPrintRef.current || selectedProductIds.size === 0) return;
     
     try {
       // Temporarily ensure the ref is visible for toPng to capture correctly.
@@ -409,18 +411,24 @@ export function Inventory() {
   }, [products, debouncedSearchQuery, selectedCategory]);
 
   const handleToggleSelectAll = () => {
-    if (selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0) {
-      setSelectedProductIds([]);
+    if (selectedProductIds.size === filteredProducts.length && filteredProducts.length > 0) {
+      setSelectedProductIds(new Set());
     } else {
-      setSelectedProductIds(filteredProducts.map(p => p.id));
+      setSelectedProductIds(new Set(filteredProducts.map(p => p.id)));
     }
   };
 
   const handleToggleSelect = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setSelectedProductIds(prev => 
-      prev.includes(id) ? prev.filter(pid => pid !== id) : [...prev, id]
-    );
+    setSelectedProductIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
   };
 
   const lowStockProducts = useMemo(() => {
@@ -477,9 +485,9 @@ export function Inventory() {
         </div>
         
         <div className="flex items-center gap-2">
-          {selectedProductIds.length > 0 && (
+          {selectedProductIds.size > 0 && (
             <Button onClick={() => setIsBatchQrDialogOpen(true)} variant="outline" className="border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs">
-              <QrCode className="mr-2 h-4 w-4" /> Generate Batch QR ({selectedProductIds.length})
+              <QrCode className="mr-2 h-4 w-4" /> Generate Batch QR ({selectedProductIds.size})
             </Button>
           )}
           <Button onClick={handleDownloadCSV} variant="outline" className="border-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2] font-mono text-xs">
@@ -722,7 +730,7 @@ export function Inventory() {
                   <input
                     type="checkbox"
                     className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
-                    checked={selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0}
+                    checked={selectedProductIds.size === filteredProducts.length && filteredProducts.length > 0}
                     onChange={handleToggleSelectAll}
                   />
                 </TableHead>
@@ -747,7 +755,8 @@ export function Inventory() {
                     <input
                       type="checkbox"
                       className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
-                      checked={selectedProductIds.includes(product.id)}
+                      // BOLT: O(1) lookup instead of O(N)
+                      checked={selectedProductIds.has(product.id)}
                       onChange={(e) => handleToggleSelect(product.id, e as any)}
                     />
                   </TableCell>
@@ -990,7 +999,7 @@ export function Inventory() {
         <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[800px] max-h-[80vh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-[#FF6F00] flex items-center gap-2">
-              <QrCode className="h-5 w-5" /> Batch QR Codes ({selectedProductIds.length})
+              <QrCode className="h-5 w-5" /> Batch QR Codes ({selectedProductIds.size})
             </DialogTitle>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto p-4 bg-[#0A0C10] border border-[#3A3230] rounded-md custom-scrollbar">
@@ -1004,7 +1013,7 @@ export function Inventory() {
                   body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
                 `}
               </style>
-              {products.filter(p => selectedProductIds.includes(p.id)).map(product => (
+              {products.filter(p => selectedProductIds.has(p.id)).map(product => (
                 <div key={product.id} className="flex flex-col items-center justify-center p-4 border border-dashed border-gray-300 rounded-lg">
                   <div className="text-center w-full mb-3">
                     <h3 className="text-black font-sans font-bold text-sm leading-tight truncate px-1 w-full">
