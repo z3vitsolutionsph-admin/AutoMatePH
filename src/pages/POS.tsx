@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import { db, auth } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
@@ -65,17 +65,30 @@ export function POS() {
           setIsSyncing(true);
           toast.success(`Syncing ${pendingTxs.length} offline transactions...`);
           let successCount = 0;
-          for (const tx of pendingTxs) {
-            try {
-              await addDoc(collection(db, 'transactions'), {
+          const BATCH_SIZE = 500;
+
+          for (let i = 0; i < pendingTxs.length; i += BATCH_SIZE) {
+            const chunk = pendingTxs.slice(i, i + BATCH_SIZE);
+            const batch = writeBatch(db);
+
+            chunk.forEach(tx => {
+              const txRef = doc(collection(db, 'transactions'));
+              batch.set(txRef, {
                 ...tx.transactionData,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
               });
-              await dbLocal.transactions.update(tx.id!, { status: 'synced' });
-              successCount++;
+            });
+
+            try {
+              await batch.commit();
+              await dbLocal.transactions.bulkUpdate(chunk.map(tx => ({
+                key: tx.id!,
+                changes: { status: 'synced' }
+              })));
+              successCount += chunk.length;
             } catch (err) {
-              console.error("Failed to sync specific tx:", err);
+              console.error("Failed to sync batch:", err);
             }
           }
           setIsSyncing(false);
