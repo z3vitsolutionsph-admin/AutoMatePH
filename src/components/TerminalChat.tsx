@@ -35,21 +35,35 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
 
   const fetchContext = async () => {
     let contextStr = 'System Knowledge Base (Real-time Snapshot):\n\n';
+    const rawProductsData: any[] = [];
+    
     try {
       // Fetch currently active inventory
-      const qProd = query(collection(db, 'products'), orderBy('name'), limit(100));
+      const qProd = query(collection(db, 'products'), orderBy('name'), limit(200));
       const syncProducts = await getDocs(qProd);
-      const prods: any[] = [];
+      const prods: string[] = [];
+      const lowStockProds: string[] = [];
       let lowStockCount = 0;
       let inventoryValue = 0;
+      
       syncProducts.forEach(doc => {
         const d = doc.data();
+        rawProductsData.push({ id: doc.id, ...d });
         prods.push(`- ${d.name} (${d.category || 'General'}): Stock ${d.stock}, Price ₱${formatCurrency(d.price)}`);
         inventoryValue += (d.stock || 0) * (d.price || 0);
-        if (d.stock <= (d.minStock || 0)) lowStockCount++;
+        if (d.stock <= (d.minStock || 0)) {
+          lowStockCount++;
+          lowStockProds.push(`- ${d.name}: ${d.stock} left (Min: ${d.minStock || 0})`);
+        }
       });
-      contextStr += `[INVENTORY METRICS]\nTotal Tracked Items: ${syncProducts.size}\nLow Stock Items: ${lowStockCount}\nTotal Retail Value: ₱${formatCurrency(inventoryValue)}\n`;
-      contextStr += `Catalog Sample:\n${prods.join('\n')}\n\n`;
+      
+      contextStr += `[INVENTORY METRICS]\nTotal Tracked Items: ${syncProducts.size}\nLow Stock Items: ${lowStockCount}\nTotal Retail Value: ₱${formatCurrency(inventoryValue)}\n\n`;
+      
+      if (lowStockProds.length > 0) {
+        contextStr += `[ALERTED ITEMS - ATTENTION REQUIRED]\n${lowStockProds.join('\n')}\n\n`;
+      }
+      
+      contextStr += `[CATALOG SAMPLE]\n${prods.slice(0, 30).join('\n')}${prods.length > 30 ? '\n... (truncated)' : ''}\n\n`;
     } catch (e) {
       console.error("Context fetch error (products):", e);
       contextStr += `[INVENTORY SYSTEM] UNAVAILABLE\n\n`;
@@ -57,21 +71,73 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
 
     try {
       // Fetch recent transactions
-      const qTrans = query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(50));
+      const qTrans = query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(100));
       const syncTrans = await getDocs(qTrans);
+      
       let totalRevenue = 0;
-      const trans: any[] = [];
+      let recentSalesCount = 0;
+      const trans: string[] = [];
+      const productSalesCount: Record<string, number> = {};
+      let oldestDate = new Date();
+
       syncTrans.forEach(doc => {
         const d = doc.data();
         if (d.status === 'COMPLETED') {
           totalRevenue += d.totalAmount || 0;
-          const date = d.createdAt?.toDate ? d.createdAt.toDate().toLocaleString() : new Date().toLocaleString();
-          const itemsSummary = d.items?.map((i: any) => `${i.quantity}x ${i.name}`).join(', ') || 'Unknown items';
-          trans.push(`- ${date}: ₱${formatCurrency(d.totalAmount)} (${itemsSummary}) - via ${d.paymentMethod}`);
+          recentSalesCount++;
+          
+          let dateActual = new Date();
+          if (d.createdAt) {
+            dateActual = typeof d.createdAt?.toDate === 'function' ? d.createdAt.toDate() : new Date(d.createdAt.seconds ? d.createdAt.seconds * 1000 : d.createdAt);
+            if (!isNaN(dateActual.getTime()) && dateActual < oldestDate) oldestDate = dateActual;
+          }
+          const dateStr = dateActual.toLocaleString();
+          
+          let itemsSummary = '';
+          if (d.items && Array.isArray(d.items)) {
+            itemsSummary = d.items.map((i: any) => {
+              if (i.name && i.quantity) {
+                productSalesCount[i.name] = (productSalesCount[i.name] || 0) + i.quantity;
+              }
+              return `${i.quantity}x ${i.name}`;
+            }).join(', ');
+          }
+          
+          trans.push(`- ${dateStr}: ₱${formatCurrency(d.totalAmount)} (${itemsSummary || 'Unknown items'}) - ${d.paymentMethod}`);
         }
       });
-      contextStr += `[RECENT TRANSACTIONS]\nTotal Revenue (Last ${syncTrans.size} tx): ₱${formatCurrency(totalRevenue)}\n`;
-      contextStr += `Transaction Log:\n${trans.join('\n')}\n\n`;
+
+      const topSelling = Object.entries(productSalesCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([name, qty]) => `- ${name}: ${qty} sold`);
+
+      let daysSpan = (new Date().getTime() - oldestDate.getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSpan < 0.5) daysSpan = 0.5;
+      if (daysSpan > 30) daysSpan = 30;
+
+      const forecastsStr: string[] = [];
+      rawProductsData.forEach(p => {
+        const sold = productSalesCount[p.name] || 0;
+        const velocity = sold / daysSpan;
+        const daysLeft = velocity > 0 ? (p.stock / velocity) : Infinity;
+        if (velocity > 0 && p.stock > 0 && daysLeft < 30) {
+          const reorderQty = Math.ceil(velocity * 14 + (p.minStock || 0));
+          forecastsStr.push(`- ${p.name}: Velocity ${velocity.toFixed(1)}/day, Stockout in ${daysLeft.toFixed(1)} days. Reorder Rec: ${reorderQty}`);
+        }
+      });
+
+      contextStr += `[SALES FIGURES (Latest ${recentSalesCount} Completed)]\nTotal Revenue: ₱${formatCurrency(totalRevenue)}\n\n`;
+      
+      if (topSelling.length > 0) {
+        contextStr += `[TOP-SELLING PRODUCTS]\n${topSelling.join('\n')}\n\n`;
+      }
+      
+      if (forecastsStr.length > 0) {
+        contextStr += `[STOCK FORECASTS & PREDICTIONS]\n${forecastsStr.join('\n')}\n\n`;
+      }
+
+      contextStr += `[RECENT TRANSACTION LOG]\n${trans.slice(0, 10).join('\n')}${trans.length > 10 ? '\n... (truncated)' : ''}\n\n`;
     } catch (e) {
       console.error("Context fetch error (transactions):", e);
       contextStr += `[TRANSACTION SYSTEM] UNAVAILABLE\n\n`;

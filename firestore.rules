@@ -18,7 +18,7 @@ service cloud.firestore {
     // Bootstrapped Admin: Your user email is given admin role for testing.
     function isSuperAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == "z3vitsolutions.ph@gmail.com" ||
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com", "a.binang@gmail.com"] ||
         exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "SUPER_ADMIN"
       );
@@ -26,7 +26,7 @@ service cloud.firestore {
     
     function isStoreManager() {
       return isSignedIn() && (
-        request.auth.token.email == "z3vitsolutions.ph@gmail.com" ||
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com", "a.binang@gmail.com"] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["STORE_MANAGER", "SUPER_ADMIN"])
       );
@@ -34,7 +34,7 @@ service cloud.firestore {
     
     function isCashierOrHigher() {
       return isSignedIn() && (
-        request.auth.token.email == "z3vitsolutions.ph@gmail.com" ||
+        request.auth.token.email in ["z3vitsolutions.ph@gmail.com", "a.binang@gmail.com"] ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["CASHIER", "STORE_MANAGER", "SUPER_ADMIN"])
       );

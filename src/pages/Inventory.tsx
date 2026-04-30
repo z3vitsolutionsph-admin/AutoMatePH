@@ -15,6 +15,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import Fuse from 'fuse.js';
 
 import { useReactToPrint } from 'react-to-print';
+import { toPng } from 'html-to-image';
+import jsPDF from 'jspdf';
 import { useDebounce } from '../hooks/useDebounce';
 
 interface Product {
@@ -46,6 +48,35 @@ export function Inventory() {
     contentRef: qrPrintRef,
     documentTitle: qrProduct ? `QR_Code_${qrProduct.name}` : 'Product_QR_Code',
   });
+
+  const handleDownloadQRPDF = async () => {
+    if (!qrPrintRef.current || !qrProduct) return;
+    
+    try {
+      const dataUrl = await toPng(qrPrintRef.current, { pixelRatio: 3 });
+      
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a6', // A small format, similar to a sticker
+      });
+      
+      const imgProps = pdf.getImageProperties(dataUrl);
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+      
+      // Center the image vertically if it's smaller than the page
+      const x = 0;
+      const y = (pdf.internal.pageSize.getHeight() - pdfHeight) / 2;
+      
+      pdf.addImage(dataUrl, 'PNG', x, Math.max(0, y), pdfWidth, pdfHeight);
+      pdf.save(`QR_Code_${qrProduct.name.replace(/\s+/g, '_')}.pdf`);
+      toast.success('PDF downloaded successfully');
+    } catch (error) {
+      console.error('Failed to generate PDF:', error);
+      toast.error('Failed to generate PDF');
+    }
+  };
 
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
@@ -841,17 +872,24 @@ export function Inventory() {
               </p>
           </div>
           )}
-          <div className="flex justify-end gap-3 mt-4">
+          <div className="flex flex-col sm:flex-row justify-end gap-3 mt-4">
             <Button 
               variant="ghost" 
               onClick={() => setIsQrDialogOpen(false)}
-              className="text-[#FAF7F2] hover:bg-[#1A1614] font-mono text-xs uppercase tracking-widest"
+              className="text-[#FAF7F2] hover:bg-[#1A1614] font-mono text-xs uppercase tracking-widest sm:flex-1"
             >
               Close
             </Button>
             <Button 
+              onClick={handleDownloadQRPDF}
+              variant="outline"
+              className="border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs uppercase tracking-widest sm:flex-1"
+            >
+              <Download className="h-4 w-4 mr-2" /> Download PDF
+            </Button>
+            <Button 
               onClick={() => handlePrintQR()}
-              className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest"
+              className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest sm:flex-1"
             >
               <Printer className="h-4 w-4 mr-2" /> Print QR Code
             </Button>

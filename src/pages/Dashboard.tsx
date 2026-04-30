@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
@@ -29,7 +29,53 @@ export function Dashboard() {
   const [salesData, setSalesData] = useState<{name: string; sales: number}[]>([]);
   const [isLoadingSales, setIsLoadingSales] = useState(true);
   const [salesError, setSalesError] = useState<string | null>(null);
+  const [products, setProducts] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
   const { role } = useAuth();
+
+  const forecastData = useMemo(() => {
+    if (products.length === 0 || transactions.length === 0) return null;
+
+    let oldestDate = new Date();
+    const productSalesMap = new Map<string, number>();
+
+    transactions.forEach(t => {
+      if (t.status === 'COMPLETED' && t.createdAt) {
+        let date;
+        if (typeof t.createdAt?.toDate === 'function') {
+          date = t.createdAt.toDate();
+        } else {
+          date = new Date(t.createdAt.seconds ? t.createdAt.seconds * 1000 : t.createdAt);
+        }
+        
+        if (!isNaN(date.getTime()) && date < oldestDate) oldestDate = date;
+        
+        if (t.items && Array.isArray(t.items)) {
+          t.items.forEach((item: any) => {
+            if (item.productId && item.quantity) {
+              productSalesMap.set(item.productId, (productSalesMap.get(item.productId) || 0) + item.quantity);
+            }
+          });
+        }
+      }
+    });
+
+    let daysSpan = (new Date().getTime() - oldestDate.getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSpan < 0.5) daysSpan = 0.5; // Avoid dividing by near-zero if all txs are from last few hours
+    if (daysSpan > 30) daysSpan = 30; // Cap at 30 days for this simple velocity calc
+
+    const forecasts = products.map(p => {
+      const sold = productSalesMap.get(p.id) || 0;
+      const velocity = sold / daysSpan;
+      const daysLeft = velocity > 0 ? (p.stock / velocity) : Infinity;
+      const reorderQty = Math.ceil(velocity * 14 + (p.minStock || 0)); // Reorder for 14 days + minStock buffer
+      return { ...p, velocity, daysLeft, reorderQty };
+    }).filter(f => f.velocity > 0 && f.stock > 0 && f.daysLeft < 30)
+      .sort((a, b) => a.daysLeft - b.daysLeft);
+
+    if (forecasts.length === 0) return null;
+    return forecasts;
+  }, [products, transactions]);
 
   useEffect(() => {
     // Basic stats aggregation
@@ -38,25 +84,30 @@ export function Dashboard() {
       let lowStockItems = 0;
       let inventoryValueCost = 0;
       let inventoryValueRetail = 0;
+      const prods: any[] = [];
       snapshot.forEach((doc) => {
         totalProducts++;
         const data = doc.data();
+        prods.push({ id: doc.id, ...data });
         if (data.stock <= (data.minStock || 0)) lowStockItems++;
         inventoryValueCost += (data.stock || 0) * (data.cost || 0);
         inventoryValueRetail += (data.stock || 0) * (data.price || 0);
       });
       setStats(s => ({ ...s, totalProducts, lowStockItems, inventoryValueCost, inventoryValueRetail }));
+      setProducts(prods);
     }, (e) => handleFirestoreError(e, OperationType.GET, 'products'));
 
-    const unsubTransactions = onSnapshot(query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(50)), (snapshot) => {
+    const unsubTransactions = onSnapshot(query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(200)), (snapshot) => {
       let totalSales = 0;
       let recentCount = 0;
       
-      // Mock chart data from latest 50 txs
+      // Mock chart data from latest txs
       const dataMap = new Map<string, number>();
+      const txs: any[] = [];
 
       snapshot.forEach((doc) => {
         const data = doc.data();
+        txs.push({ id: doc.id, ...data });
         if (data.status === 'COMPLETED') {
           totalSales += data.totalAmount;
           recentCount++;
@@ -99,6 +150,7 @@ export function Dashboard() {
         
       setSalesData(chartData);
       setStats(s => ({ ...s, totalSales, recentTransactionsCount: recentCount }));
+      setTransactions(txs);
       setIsLoadingSales(false);
       setSalesError(null);
     }, (e) => {
@@ -244,17 +296,30 @@ export function Dashboard() {
               <span>●</span> AI FORESIGHT (GEMINI)
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex-1">
-            <div className="space-y-4">
-               <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
-                 <div className="text-xs text-[#7A736E] font-mono mb-2">FORECAST: STOCKOUT WARNING</div>
-                 <div className="text-sm text-[#FAF7F2] leading-relaxed">
-                   Based on trailing 7-day velocity, 'Mineral Water 500ml' will exhaust in 1.4 days. Recommend reordering 200 units.
+          <CardContent className="flex-1 flex flex-col">
+            <div className="space-y-4 flex-1">
+               {forecastData && forecastData.length > 0 ? (
+                 <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
+                   <div className="text-xs text-[#7A736E] font-mono mb-2 flex items-center justify-between">
+                     <span>FORECAST: STOCKOUT WARNING</span>
+                     <span className="text-[#FF6F00]">{forecastData.length} items on watch</span>
+                   </div>
+                   <div className="text-sm text-[#FAF7F2] leading-relaxed">
+                     Based on trailing velocity, <span className="font-bold text-[#FF6F00]">{forecastData[0].name}</span> will exhaust in <span className="font-bold">{forecastData[0].daysLeft.toFixed(1)} days</span>. 
+                     Recommend reordering <span className="font-bold text-[#1D9E75]">{forecastData[0].reorderQty} units</span> to cover lead time.
+                   </div>
                  </div>
-               </div>
+               ) : (
+                 <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
+                   <div className="text-xs text-[#7A736E] font-mono mb-2">FORECAST: ALL STABLE</div>
+                   <div className="text-sm text-[#FAF7F2] leading-relaxed">
+                     No critical stockout warnings detected based on recent velocity.
+                   </div>
+                 </div>
+               )}
                
                {/* We will build the global terminal chatbot later */}
-               <div className="text-center mt-8">
+               <div className="text-center mt-auto pb-2">
                  <button 
                    onClick={() => window.dispatchEvent(new CustomEvent('open-terminal'))}
                    className="text-[#FF6F00] font-mono text-xs border-b border-dashed border-[#FF6F00] pb-1 hover:text-[#FAF7F2] hover:border-[#FAF7F2] transition-colors"
@@ -266,6 +331,59 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Detailed Foresight Forecast */}
+      {forecastData && forecastData.length > 0 && (
+        <div className="mt-6">
+          <Card className="bg-[#141210] border-[#3A3230]">
+            <CardHeader>
+              <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-wide">
+                Stockout Predictions & Reorder Intelligence
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs font-mono uppercase bg-[#1A1614] text-[#7A736E] border-b border-[#3A3230]">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Product Name</th>
+                      <th className="px-4 py-3 font-medium text-right">Current Stock</th>
+                      <th className="px-4 py-3 font-medium text-right">Velocity (per day)</th>
+                      <th className="px-4 py-3 font-medium text-right">Days Remaining</th>
+                      <th className="px-4 py-3 font-medium text-right">Est. Stockout Date</th>
+                      <th className="px-4 py-3 font-medium text-right text-[#1D9E75]">Rec. Reorder (14d)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {forecastData.map((item, i) => {
+                      const stockoutDate = new Date();
+                      stockoutDate.setDate(stockoutDate.getDate() + item.daysLeft);
+                      const isCritical = item.daysLeft <= 3;
+                      const isWarning = item.daysLeft <= 7 && !isCritical;
+                      return (
+                        <tr key={item.id} className="border-b border-[#3A3230]/50 hover:bg-[#1A1614] text-[#FAF7F2]">
+                          <td className="px-4 py-3 font-medium">{item.name}</td>
+                          <td className="px-4 py-3 text-right">{item.stock}</td>
+                          <td className="px-4 py-3 text-right">{item.velocity.toFixed(2)}</td>
+                          <td className={`px-4 py-3 text-right font-bold ${isCritical ? 'text-red-500' : isWarning ? 'text-[#FF6F00]' : ''}`}>
+                            {item.daysLeft.toFixed(1)} days
+                          </td>
+                          <td className={`px-4 py-3 text-right ${isCritical ? 'text-red-500 font-medium' : isWarning ? 'text-[#FF6F00]' : 'text-[#7A736E]'}`}>
+                            {stockoutDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-[#1D9E75]">
+                            {item.reorderQty}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }

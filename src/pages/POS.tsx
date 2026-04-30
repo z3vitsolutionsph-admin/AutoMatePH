@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff, Camera, X } from 'lucide-react';
+import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff, Camera, X, Printer, CheckCircle2 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -15,6 +15,7 @@ import { formatCurrency } from '../lib/utils';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import Fuse from 'fuse.js';
 import { useDebounce } from '../hooks/useDebounce';
+import { useReactToPrint } from 'react-to-print';
 
 // Mock inventory for quick demonstration, but we'll sync with Firestore
 interface Product {
@@ -42,6 +43,18 @@ export function POS() {
   const cashInputRef = useRef<HTMLInputElement>(null);
   
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Receipt Modal State
+  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
+  const [completedTx, setCompletedTx] = useState<any>(null);
+  const receiptPrintRef = useRef<HTMLDivElement>(null);
+
+  const handlePrintReceipt = useReactToPrint({
+    contentRef: receiptPrintRef,
+    documentTitle: completedTx ? `Receipt_${completedTx.id}` : 'Transaction_Receipt',
+    onAfterPrint: () => toast.success('Receipt printed successfully.'),
+    onPrintError: (error) => toast.error('Error encountered while printing the receipt.'),
+  });
 
   useEffect(() => {
     const handleOnline = async () => {
@@ -319,11 +332,12 @@ export function POS() {
   const processCheckout = async (paymentMethod: string) => {
     if (cart.length === 0) return;
     
-    const cashierId = auth.currentUser?.uid;
-    if (!cashierId) {
-      toast.error('Session expired. Please log in.');
-      return;
+    let cashRcv = Number(cashReceived);
+    if (paymentMethod !== 'CASH') {
+      cashRcv = total; // For card/wallet, they exact amount
     }
+
+    const cashierId = auth.currentUser?.uid || 'UNKNOWN';
 
     const transactionData = {
       totalAmount: total,
@@ -333,56 +347,77 @@ export function POS() {
         productId: item.id,
         quantity: item.quantity,
         unitPrice: item.price,
-        subtotal: item.subtotal
+        subtotal: item.subtotal,
+        name: item.name,
       })),
-      status: 'COMPLETED'
+      status: 'COMPLETED',
+      cashReceived: cashRcv,
+      change: cashRcv - total,
     };
+
+    let newTxId = '';
+    let timestamp = new Date();
 
     if (isOffline) {
       try {
+        newTxId = crypto.randomUUID();
         await dbLocal.transactions.add({
-          syncId: crypto.randomUUID(),
+          syncId: newTxId,
           transactionData,
           status: 'pending',
-          createdAt: new Date().toISOString()
+          createdAt: timestamp.toISOString()
         });
         toast.success('Offline mode: Transaction queued locally.', {
           icon: <WifiOff className="h-4 w-4" />
         });
-        setCart([]);
       } catch (err) {
         console.error(err);
         toast.error('Failed to save offline transaction.');
+        return;
       }
-      return;
-    }
-
-    try {
-       await addDoc(collection(db, 'transactions'), {
-         ...transactionData,
-         createdAt: serverTimestamp(),
-         updatedAt: serverTimestamp()
-       });
-
-       for (const item of cart) {
-         await updateDoc(doc(db, 'products', item.id), {
-           stock: item.stock - item.quantity,
+    } else {
+      try {
+         const docRef = await addDoc(collection(db, 'transactions'), {
+           ...transactionData,
+           createdAt: serverTimestamp(),
            updatedAt: serverTimestamp()
          });
-       }
+         newTxId = docRef.id;
 
-       await addDoc(collection(db, 'activityLogs'), {
-         type: 'SALE',
-         userId: cashierId,
-         details: `Completed SALE for ₱${formatCurrency(total)} (${cart.length} items)`,
-         timestamp: serverTimestamp()
-       });
-       
-       toast.success('Transaction Completed Successfully');
-       setCart([]);
-    } catch (error) {
-       handleFirestoreError(error, OperationType.CREATE, 'transactions');
+         for (const item of cart) {
+           await updateDoc(doc(db, 'products', item.id), {
+             stock: item.stock - item.quantity,
+             updatedAt: serverTimestamp()
+           });
+         }
+
+         await addDoc(collection(db, 'activityLogs'), {
+           type: 'SALE',
+           userId: cashierId,
+           details: `Completed SALE for ₱${formatCurrency(total)} (${cart.length} items)`,
+           timestamp: serverTimestamp()
+         });
+         
+         toast.success('Transaction Completed Successfully');
+      } catch (error) {
+         handleFirestoreError(error, OperationType.CREATE, 'transactions');
+         return; 
+      }
     }
+
+    setCompletedTx({
+      id: newTxId,
+      ...transactionData,
+      createdAt: timestamp,
+    });
+    setReceiptModalOpen(true);
+  };
+
+  const closeReceiptAndNewTransaction = () => {
+    setCart([]);
+    setCompletedTx(null);
+    setCashReceived('');
+    setReceiptModalOpen(false);
   };
 
   return (
@@ -614,7 +649,9 @@ export function POS() {
       
       {/* Checkout Modal */}
       <Dialog open={checkoutModalOpen} onOpenChange={setCheckoutModalOpen}>
-        <DialogContent className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md">
+        <DialogContent 
+          className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md"
+        >
           <DialogHeader>
             <DialogTitle className="text-[#FF6F00] uppercase tracking-widest text-sm border-b border-[#3A3230] pb-4">
               Cash Checkout
@@ -683,6 +720,179 @@ export function POS() {
               Confirm Transaction
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt Modal */}
+      <Dialog open={receiptModalOpen} onOpenChange={(open) => {
+        if (!open) closeReceiptAndNewTransaction();
+      }}>
+        <DialogContent 
+          className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md p-0 overflow-hidden [&>button]:opacity-0"
+        >
+          <div className="flex flex-col items-center justify-center p-6 bg-[#1D9E75]/10 border-b border-[#3A3230]">
+              <CheckCircle2 className="h-12 w-12 text-[#1D9E75] mb-2" />
+              <h2 className="text-xl font-bold font-sans">Payment Successful</h2>
+              <p className="text-[#7A736E] text-xs mt-1">Transaction ID: <span className="text-[#FAF7F2]">{completedTx?.id}</span></p>
+              {completedTx?.change > 0 && (
+                 <div className="mt-4 bg-[#141210] border border-[#1D9E75]/30 rounded-lg px-6 py-3 text-center">
+                    <p className="text-[#7A736E] uppercase tracking-widest text-[10px]">Change Due</p>
+                    <p className="text-[#1D9E75] font-bold text-2xl font-sans">₱{formatCurrency(completedTx.change)}</p>
+                 </div>
+              )}
+          </div>
+          
+          <div className="p-6 overflow-y-auto custom-scrollbar max-h-[50vh] flex justify-center">
+            <div 
+              ref={receiptPrintRef} 
+              className="bg-white text-black p-4 font-mono text-[10px] sm:text-xs"
+              style={{ width: '80mm', maxWidth: '100%', boxSizing: 'border-box' }}
+            >
+              {/* Print-specific styles to remove browser headers/footers and margins */}
+              <style type="text/css" media="print">
+                {`
+                  @page { size: auto; margin: 0mm; }
+                  body { margin: 10mm; }
+                `}
+              </style>
+
+              <div className="text-center mb-4">
+                <div className="flex justify-center mb-2">
+                  {/* Simple logo placeholder */}
+                  <div className="h-10 w-10 bg-black text-white flex items-center justify-center rounded-sm font-bold text-xl">
+                    A
+                  </div>
+                </div>
+                <h1 className="font-bold text-base sm:text-lg mb-1">AUTOMATE_PH</h1>
+                <p>123 Tech Avenue, Makati City</p>
+                <p>Metro Manila, Philippines</p>
+                <p>VAT REG TIN: 123-456-789-000</p>
+                <p>MIN: 123456789</p>
+                <p className="my-2 border-b border-dashed border-gray-400"></p>
+                <p className="font-bold text-sm tracking-widest">OFFICIAL RECEIPT</p>
+                <p className="my-2 border-b border-dashed border-gray-400"></p>
+              </div>
+              
+              <div className="mb-4 space-y-1">
+                <div className="flex justify-between">
+                  <span>DATE:</span>
+                  <span>{completedTx?.createdAt?.toLocaleString() || new Date().toLocaleString()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>OR NO:</span>
+                  <span className="truncate w-32 text-right">{completedTx?.id?.substring(0, 12).toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>CASHIER:</span>
+                  <span className="truncate w-32 text-right">{completedTx?.cashierId?.substring(0, 8) || 'N/A'}</span>
+                </div>
+              </div>
+
+              <p className="my-2 border-b border-dashed border-gray-400"></p>
+              
+              {/* Table Header for Items */}
+              <div className="flex justify-between font-bold mb-2 pb-1 border-b border-gray-300">
+                <span className="flex-1">ITEM</span>
+                <span className="w-16 text-right">QTY</span>
+                <span className="w-20 text-right">AMOUNT</span>
+              </div>
+
+              <div className="my-2 space-y-2">
+                {completedTx?.items.map((item: any, i: number) => (
+                  <div key={i} className="flex flex-col">
+                     <span className="font-bold">{item.name}</span>
+                     <div className="flex justify-between text-gray-700">
+                        <span className="flex-1 pl-2">@ {formatCurrency(item.unitPrice)}</span>
+                        <span className="w-16 text-right">{item.quantity}</span>
+                        <span className="w-20 text-right">{formatCurrency(item.subtotal)}</span>
+                     </div>
+                  </div>
+                ))}
+              </div>
+
+              <p className="my-2 border-b border-dashed border-gray-400"></p>
+              
+              {/* Totals and Tax Breakdown */}
+              <div className="my-4 space-y-1">
+                <div className="flex justify-between text-gray-700">
+                  <span>SUBTOTAL</span>
+                  <span>{formatCurrency(completedTx?.totalAmount || 0)}</span>
+                </div>
+                
+                {/* Philippine Standard VAT Calculation (12% Inclusive) */}
+                {(() => {
+                  const total = completedTx?.totalAmount || 0;
+                  const vatable = total / 1.12;
+                  const vat = total - vatable;
+                  return (
+                    <>
+                      <div className="flex justify-between text-gray-700 text-[9px]">
+                        <span>VATable Sales</span>
+                        <span>{formatCurrency(vatable)}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-700 text-[9px]">
+                        <span>VAT Amount (12%)</span>
+                        <span>{formatCurrency(vat)}</span>
+                      </div>
+                      <div className="flex justify-between text-gray-700 text-[9px]">
+                        <span>VAT Exempt Sales</span>
+                        <span>0.00</span>
+                      </div>
+                    </>
+                  );
+                })()}
+
+                <p className="my-2 border-b border-dashed border-gray-400"></p>
+
+                <div className="flex justify-between items-center pb-1">
+                  <span className="font-bold text-sm">TOTAL DUE:</span>
+                  <span className="text-base font-bold text-black border-y-2 border-black py-1">
+                    ₱{formatCurrency(completedTx?.totalAmount || 0)}
+                  </span>
+                </div>
+                
+                <div className="flex justify-between mt-2 pt-1 border-t border-gray-300">
+                  <span>PAID ({completedTx?.paymentMethod}):</span>
+                  <span>{formatCurrency(completedTx?.cashReceived || 0)}</span>
+                </div>
+                <div className="flex justify-between font-bold">
+                  <span>CHANGE:</span>
+                  <span>{formatCurrency(completedTx?.change || 0)}</span>
+                </div>
+              </div>
+              
+              <p className="my-2 border-b border-dashed border-gray-400"></p>
+              
+              {/* Footer */}
+              <div className="text-center mt-4 space-y-1">
+                <p className="font-bold text-xs uppercase">Thank you for your purchase!</p>
+                <p className="text-[9px] uppercase">Please come again.</p>
+                <p className="text-[9px] mt-2">Return policy: 7 days with original receipt.</p>
+                <p className="text-[9px] mt-4 font-bold border-t border-gray-400 pt-2">
+                  THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX
+                </p>
+                <p className="text-[8px] mt-1 text-gray-500">
+                  Powered by AutoMatePH
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 border-t border-[#3A3230] flex gap-3 bg-[#0A0C10]">
+            <Button
+              onClick={() => handlePrintReceipt()}
+              variant="outline"
+              className="flex-1 border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs tracking-widest uppercase"
+            >
+              <Printer className="h-4 w-4 mr-2" /> Print Receipt
+            </Button>
+            <Button
+              onClick={closeReceiptAndNewTransaction}
+              className="flex-1 bg-[#1D9E75] hover:bg-[#1D9E75]/80 text-[#0A0C10] font-mono text-xs tracking-widest uppercase"
+            >
+              New Transaction
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
