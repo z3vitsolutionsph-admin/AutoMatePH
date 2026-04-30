@@ -149,19 +149,20 @@ export function Login() {
       }
     } catch (error: any) {
       console.error(error);
+      const errorCode = error.code || '';
       let errorMessage = error.message || 'Authentication failed';
-      if (errorMessage.includes('invalid-credential')) {
+      if (errorCode === 'auth/invalid-credential' || errorMessage.includes('invalid-credential')) {
         errorMessage = 'Invalid email or password';
         setEmailError('Invalid email or password');
         setPasswordError('Invalid email or password');
-      } else if (errorMessage.includes('auth/user-not-found') || errorMessage.includes('auth/wrong-password')) {
+      } else if (errorCode.includes('auth/user-not-found') || errorCode.includes('auth/wrong-password') || errorMessage.includes('auth/user-not-found') || errorMessage.includes('auth/wrong-password')) {
         errorMessage = 'Invalid email or password';
         setEmailError('Invalid email or password');
         setPasswordError('Invalid email or password');
-      } else if (errorMessage.includes('email-already-in-use')) {
+      } else if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('email-already-in-use')) {
         errorMessage = 'An account with this email already exists';
         setEmailError('Email already in use');
-      } else if (errorMessage.includes('weak-password')) {
+      } else if (errorCode === 'auth/weak-password' || errorMessage.includes('weak-password')) {
         errorMessage = 'Password must be at least 6 characters';
         setPasswordError('Password too weak');
       }

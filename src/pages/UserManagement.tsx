@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { db, auth } from '../lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Plus, Search, Edit2, ShieldAlert, UserX, UserCheck } from 'lucide-react';
+import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
+import { Plus, Search, Edit2, ShieldAlert, UserX, UserCheck, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { initializeApp } from 'firebase/app';
@@ -45,8 +46,10 @@ export function UserManagement() {
   const [role, setRole] = useState('CASHIER');
   const [isActive, setIsActive] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteConfirmationUser, setDeleteConfirmationUser] = useState<UserData | null>(null);
+  const [formErrors, setFormErrors] = useState<{email?: string, password?: string, name?: string, general?: string}>({});
   
-  const { role: currentUserRole } = useAuth();
+  const { user: currentUser, role: currentUserRole } = useAuth();
   const canManage = currentUserRole === 'SUPER_ADMIN';
 
   useEffect(() => {
@@ -79,9 +82,11 @@ export function UserManagement() {
     setName('');
     setRole('CASHIER');
     setIsActive(true);
+    setFormErrors({});
   };
 
   const openDialog = (user?: UserData) => {
+    setFormErrors({});
     if (user) {
       setEditingUser(user);
       setEmail(user.email);
@@ -95,12 +100,45 @@ export function UserManagement() {
     setIsDialogOpen(true);
   };
 
+  const validateForm = () => {
+    const errors: {email?: string, password?: string, name?: string} = {};
+    let isValid = true;
+    
+    if (!name.trim()) {
+      errors.name = 'Full name is required';
+      isValid = false;
+    }
+
+    if (!editingUser) {
+      if (!email.trim()) {
+        errors.email = 'Email address is required';
+        isValid = false;
+      } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        errors.email = 'Please enter a valid email address';
+        isValid = false;
+      }
+
+      if (!password) {
+        errors.password = 'Password is required';
+        isValid = false;
+      } else if (password.length < 6) {
+        errors.password = 'Password must be at least 6 characters';
+        isValid = false;
+      }
+    }
+
+    setFormErrors(errors);
+    return isValid;
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canManage) return;
     
-    if (!name || (!editingUser && (!email || !password))) {
-      toast.error('Please fill in all required fields');
+    setFormErrors({});
+
+    if (!validateForm()) {
+      toast.error('Please fix the errors in the form');
       return;
     }
 
@@ -149,11 +187,20 @@ export function UserManagement() {
       resetForm();
     } catch (error: any) {
       console.error('Error saving user:', error);
+      const errorCode = error.code || '';
       let errorMessage = error.message || 'Operation failed';
-      if (errorMessage.includes('email-already-in-use')) {
+      
+      if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('email-already-in-use')) {
         errorMessage = 'This email is already registered';
-      } else if (errorMessage.includes('weak-password')) {
+        setFormErrors(prev => ({ ...prev, email: errorMessage }));
+      } else if (errorCode === 'auth/weak-password' || errorMessage.includes('weak-password')) {
         errorMessage = 'Password must be at least 6 characters';
+        setFormErrors(prev => ({ ...prev, password: errorMessage }));
+      } else if (errorCode === 'auth/invalid-email' || errorMessage.includes('invalid-email')) {
+        errorMessage = 'Please enter a valid email address';
+        setFormErrors(prev => ({ ...prev, email: errorMessage }));
+      } else {
+        setFormErrors(prev => ({ ...prev, general: errorMessage }));
       }
       toast.error(errorMessage);
     } finally {
@@ -171,6 +218,24 @@ export function UserManagement() {
        toast.success(`User ${user.isActive ? 'disabled' : 'enabled'} successfully`);
     } catch (error: any) {
        handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    if (isSubmitting || !deleteConfirmationUser) return;
+    
+    const user = deleteConfirmationUser;
+    
+    try {
+      setIsSubmitting(true);
+      await deleteDoc(doc(db, 'users', user.id));
+      toast.success(`User ${user.name} deleted successfully`);
+      setDeleteConfirmationUser(null);
+    } catch (error: any) {
+      console.error('Error deleting user:', error);
+      handleFirestoreError(error, OperationType.DELETE, `users/${user.id}`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -197,9 +262,11 @@ export function UserManagement() {
             if (!isOpen) { setIsDialogOpen(false); resetForm(); }
             else openDialog();
           }}>
-            <DialogTrigger render={<Button className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold" />}>
-              <Plus className="mr-2 h-4 w-4" /> Add User
-            </DialogTrigger>
+            <DialogTrigger render={(props: any) => (
+              <Button {...props} className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold">
+                <Plus className="mr-2 h-4 w-4" /> Add User
+              </Button>
+            )} />
             <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md">
               <DialogHeader>
                 <DialogTitle className="text-[#FF6F00] uppercase tracking-widest text-sm border-b border-[#3A3230] pb-4">
@@ -207,6 +274,11 @@ export function UserManagement() {
                 </DialogTitle>
               </DialogHeader>
               <form onSubmit={handleSave} className="space-y-4 pt-4">
+                {formErrors.general && (
+                  <div className="bg-red-500/10 border border-red-500/50 text-red-500 px-3 py-2 rounded text-sm mb-4">
+                    {formErrors.general}
+                  </div>
+                )}
                 {!editingUser && (
                   <>
                     <div className="space-y-1.5">
@@ -215,9 +287,13 @@ export function UserManagement() {
                         required
                         type="email"
                         value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] focus-visible:ring-[#FF6F00]"
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          if (formErrors.email) setFormErrors(prev => ({ ...prev, email: undefined }));
+                        }}
+                        className={`bg-[#0A0C10] text-[#FAF7F2] ${formErrors.email ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'}`}
                       />
+                      {formErrors.email && <p className="text-red-500 text-xs mt-1">{formErrors.email}</p>}
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[10px] text-[#7A736E] uppercase tracking-wider">Password</label>
@@ -225,9 +301,13 @@ export function UserManagement() {
                         required
                         type="password"
                         value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] focus-visible:ring-[#FF6F00]"
+                        onChange={(e) => {
+                          setPassword(e.target.value);
+                          if (formErrors.password) setFormErrors(prev => ({ ...prev, password: undefined }));
+                        }}
+                        className={`bg-[#0A0C10] text-[#FAF7F2] ${formErrors.password ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'}`}
                       />
+                      {formErrors.password && <p className="text-red-500 text-xs mt-1">{formErrors.password}</p>}
                     </div>
                   </>
                 )}
@@ -237,9 +317,13 @@ export function UserManagement() {
                   <Input
                     required
                     value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] focus-visible:ring-[#FF6F00]"
+                    onChange={(e) => {
+                      setName(e.target.value);
+                      if (formErrors.name) setFormErrors(prev => ({ ...prev, name: undefined }));
+                    }}
+                    className={`bg-[#0A0C10] text-[#FAF7F2] ${formErrors.name ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'}`}
                   />
+                  {formErrors.name && <p className="text-red-500 text-xs mt-1">{formErrors.name}</p>}
                 </div>
                 
                 <div className="space-y-1.5">
@@ -347,6 +431,17 @@ export function UserManagement() {
                     >
                       {user.isActive !== false ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                     </Button>
+                    {currentUser?.uid !== user.id && (
+                      <Button 
+                        variant="ghost" 
+                        size="icon"
+                        onClick={() => setDeleteConfirmationUser(user)}
+                        className="h-8 w-8 ml-1 text-red-500 hover:text-red-400 hover:bg-red-500/10"
+                        title="Delete User"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}
@@ -361,6 +456,43 @@ export function UserManagement() {
           </Table>
         </div>
       </div>
+
+      <AlertDialog open={!!deleteConfirmationUser} onOpenChange={(open) => !open && setDeleteConfirmationUser(null)}>
+        <AlertDialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-500">Delete User Account</AlertDialogTitle>
+            <AlertDialogDescription className="text-[#7A736E]">
+              Are you sure you want to permanently delete <span className="font-bold text-[#FAF7F2]">{deleteConfirmationUser?.name}</span>? 
+              This action will remove their access to the application immediately.
+              <br /><br />
+              <span className="text-red-400 text-xs gap-1 flex items-center">
+                <ShieldAlert className="w-3 h-3" />
+                Note: This deletes their app data. You must also delete their Authentication record from the Firebase Console to fully erase their credentials.
+              </span>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => setDeleteConfirmationUser(null)} 
+              disabled={isSubmitting} 
+              className="border-[#3A3230] bg-transparent hover:bg-[#1A1614] text-[#FAF7F2]"
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteUser();
+              }}
+              disabled={isSubmitting}
+              className="bg-red-500 hover:bg-red-600 text-white"
+            >
+              {isSubmitting ? 'Deleting...' : 'Delete Permanently'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
