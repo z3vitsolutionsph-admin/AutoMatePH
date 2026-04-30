@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import { db, auth } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
@@ -377,27 +377,34 @@ export function POS() {
       }
     } else {
       try {
-         const docRef = await addDoc(collection(db, 'transactions'), {
+         const batch = writeBatch(db);
+
+         const txRef = doc(collection(db, 'transactions'));
+         newTxId = txRef.id;
+
+         batch.set(txRef, {
            ...transactionData,
            createdAt: serverTimestamp(),
            updatedAt: serverTimestamp()
          });
-         newTxId = docRef.id;
 
          for (const item of cart) {
-           await updateDoc(doc(db, 'products', item.id), {
+           const productRef = doc(db, 'products', item.id);
+           batch.update(productRef, {
              stock: item.stock - item.quantity,
              updatedAt: serverTimestamp()
            });
          }
 
-         await addDoc(collection(db, 'activityLogs'), {
+         const logRef = doc(collection(db, 'activityLogs'));
+         batch.set(logRef, {
            type: 'SALE',
            userId: cashierId,
            details: `Completed SALE for ₱${formatCurrency(total)} (${cart.length} items)`,
            timestamp: serverTimestamp()
          });
          
+         await batch.commit();
          toast.success('Transaction Completed Successfully');
       } catch (error) {
          handleFirestoreError(error, OperationType.CREATE, 'transactions');
