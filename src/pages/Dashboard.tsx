@@ -5,7 +5,7 @@ import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestor
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
 import { PackageSearch, TrendingUp, AlertTriangle, Activity } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 
 interface Stats {
@@ -76,6 +76,41 @@ export function Dashboard() {
     if (forecasts.length === 0) return null;
     return forecasts;
   }, [products, transactions]);
+
+  const salesByCategory = useMemo(() => {
+    if (products.length === 0 || transactions.length === 0) return [];
+    
+    const categorySalesMap = new Map<string, number>();
+    const productMap = new Map<string, any>();
+    products.forEach(p => productMap.set(p.id, p));
+
+    transactions.forEach(t => {
+      if (t.status === 'COMPLETED' && t.items && Array.isArray(t.items)) {
+        t.items.forEach((item: any) => {
+          const product = productMap.get(item.productId);
+          const category = product?.category || 'Uncategorized';
+          const salesAmount = (item.quantity || 0) * (item.price || 0);
+          categorySalesMap.set(category, (categorySalesMap.get(category) || 0) + salesAmount);
+        });
+      }
+    });
+
+    const sortedCategories = Array.from(categorySalesMap.entries())
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
+
+    // Group into 'Other' if more than 5 categories
+    if (sortedCategories.length > 5) {
+      const topCategories = sortedCategories.slice(0, 4);
+      const otherValue = sortedCategories.slice(4).reduce((acc, curr) => acc + curr.value, 0);
+      topCategories.push({ name: 'Other', value: otherValue });
+      return topCategories;
+    }
+
+    return sortedCategories;
+  }, [products, transactions]);
+
+  const COLORS = ['#FF6F00', '#1D9E75', '#8E44AD', '#3498DB', '#E74C3C', '#F1C40F', '#34495E', '#1ABC9C'];
 
   useEffect(() => {
     // Basic stats aggregation
@@ -332,58 +367,125 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Detailed Foresight Forecast */}
-      {forecastData && forecastData.length > 0 && (
-        <div className="mt-6">
-          <Card className="bg-[#141210] border-[#3A3230]">
-            <CardHeader>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6 items-start">
+        {/* Detailed Foresight Forecast */}
+        <div className="lg:col-span-2">
+          <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px]">
+            <CardHeader className="border-b border-[#3A3230]/50 pb-4">
               <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-wide">
                 Stockout Predictions & Reorder Intelligence
               </CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-xs font-mono uppercase bg-[#1A1614] text-[#7A736E] border-b border-[#3A3230]">
-                    <tr>
-                      <th className="px-4 py-3 font-medium">Product Name</th>
-                      <th className="px-4 py-3 font-medium text-right">Current Stock</th>
-                      <th className="px-4 py-3 font-medium text-right">Velocity (per day)</th>
-                      <th className="px-4 py-3 font-medium text-right">Days Remaining</th>
-                      <th className="px-4 py-3 font-medium text-right">Est. Stockout Date</th>
-                      <th className="px-4 py-3 font-medium text-right text-[#1D9E75]">Rec. Reorder (14d)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {forecastData.map((item, i) => {
-                      const stockoutDate = new Date();
-                      stockoutDate.setDate(stockoutDate.getDate() + item.daysLeft);
-                      const isCritical = item.daysLeft <= 3;
-                      const isWarning = item.daysLeft <= 7 && !isCritical;
-                      return (
-                        <tr key={item.id} className="border-b border-[#3A3230]/50 hover:bg-[#1A1614] text-[#FAF7F2]">
-                          <td className="px-4 py-3 font-medium">{item.name}</td>
-                          <td className="px-4 py-3 text-right">{item.stock}</td>
-                          <td className="px-4 py-3 text-right">{item.velocity.toFixed(2)}</td>
-                          <td className={`px-4 py-3 text-right font-bold ${isCritical ? 'text-red-500' : isWarning ? 'text-[#FF6F00]' : ''}`}>
-                            {item.daysLeft.toFixed(1)} days
-                          </td>
-                          <td className={`px-4 py-3 text-right ${isCritical ? 'text-red-500 font-medium' : isWarning ? 'text-[#FF6F00]' : 'text-[#7A736E]'}`}>
-                            {stockoutDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-                          </td>
-                          <td className="px-4 py-3 text-right font-bold text-[#1D9E75]">
-                            {item.reorderQty}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+            <CardContent className="flex-1 p-0">
+              {forecastData && forecastData.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="text-xs font-mono uppercase bg-[#1A1614] text-[#7A736E] border-b border-[#3A3230]">
+                      <tr>
+                        <th className="px-6 py-4 font-medium">Product Name</th>
+                        <th className="px-6 py-4 font-medium text-right">Current Stock</th>
+                        <th className="px-6 py-4 font-medium text-right">Velocity/Day</th>
+                        <th className="px-6 py-4 font-medium text-right">Days Left</th>
+                        <th className="px-6 py-4 font-medium text-right">Est. Stockout</th>
+                        <th className="px-6 py-4 font-medium text-right text-[#1D9E75]">Rec. Reorder</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {forecastData.map((item, i) => {
+                        const stockoutDate = new Date();
+                        stockoutDate.setDate(stockoutDate.getDate() + item.daysLeft);
+                        const isCritical = item.daysLeft <= 3;
+                        const isWarning = item.daysLeft <= 7 && !isCritical;
+                        return (
+                          <tr key={item.id} className="border-b border-[#3A3230]/50 hover:bg-[#1A1614] text-[#FAF7F2] transition-colors">
+                            <td className="px-6 py-4 font-medium">{item.name}</td>
+                            <td className="px-6 py-4 text-right">{item.stock}</td>
+                            <td className="px-6 py-4 text-right">{item.velocity.toFixed(2)}</td>
+                            <td className={`px-6 py-4 text-right font-bold ${isCritical ? 'text-red-500' : isWarning ? 'text-[#FF6F00]' : ''}`}>
+                              {item.daysLeft.toFixed(1)} days
+                            </td>
+                            <td className={`px-6 py-4 text-right ${isCritical ? 'text-red-500 font-medium' : isWarning ? 'text-[#FF6F00]' : 'text-[#7A736E]'}`}>
+                              {stockoutDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </td>
+                            <td className="px-6 py-4 text-right font-bold text-[#1D9E75] bg-[#1D9E75]/5">
+                              {item.reorderQty}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="h-full w-full min-h-[250px] flex flex-col items-center justify-center text-[#7A736E] font-mono py-10">
+                   <PackageSearch className="w-12 h-12 mb-3 opacity-20" />
+                   <span>INVENTORY LEVELS STABLE</span>
+                   <span className="text-xs mt-1 opacity-70">No critical stockouts predicted in the near term.</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
-      )}
+
+        {/* Sales By Category */}
+        <div className="lg:col-span-1">
+          <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px] h-full">
+            <CardHeader className="border-b border-[#3A3230]/50 pb-4">
+              <CardTitle className="text-sm font-mono text-[#7A736E] uppercase">Sales By Category</CardTitle>
+            </CardHeader>
+            <CardContent className="flex-1 w-full relative pt-4 flex flex-col items-center justify-center">
+              {isLoadingSales ? (
+                <div className="flex flex-col items-center justify-center font-mono text-[#7A736E] animate-pulse">
+                  <Activity className="h-6 w-6 mb-2 opacity-50" />
+                  <span className="text-xs tracking-widest">CALCULATING...</span>
+                </div>
+              ) : salesError ? (
+                <div className="flex flex-col items-center justify-center font-mono text-red-500 px-6 text-center">
+                  <AlertTriangle className="h-6 w-6 mb-2 opacity-80" />
+                  <span className="text-sm">{salesError}</span>
+                </div>
+              ) : salesByCategory.length > 0 ? (
+                <ResponsiveContainer width="100%" height={280}>
+                  <PieChart>
+                    <Pie
+                      data={salesByCategory}
+                      cx="50%"
+                      cy="48%"
+                      innerRadius={65}
+                      outerRadius={90}
+                      paddingAngle={6}
+                      dataKey="value"
+                      stroke="none"
+                      cornerRadius={4}
+                    >
+                      {salesByCategory.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)' }}
+                      itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px' }}
+                      formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
+                      labelStyle={{ display: 'none' }}
+                    />
+                    <Legend 
+                      verticalAlign="bottom" 
+                      height={40} 
+                      iconType="circle"
+                      formatter={(value) => <span className="text-xs font-mono text-[#FAF7F2] ml-1">{value}</span>}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex flex-col items-center justify-center font-mono text-[#7A736E]">
+                  <Activity className="w-8 h-8 opacity-20 mb-3" />
+                  <span className="text-xs tracking-widest">NO DATA AVAILABLE</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }

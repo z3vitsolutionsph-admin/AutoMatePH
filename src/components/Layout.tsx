@@ -20,7 +20,7 @@ export function Layout() {
   const navItems = [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Terminal (POS)', path: '/pos', icon: ShoppingCart, roles: ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER'] },
-    { label: 'Inventory', path: '/inventory', icon: Package, roles: ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER', 'INVENTORY_CLERK'] },
+    { label: 'Inventory', path: '/inventory', icon: Package, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Activity', path: '/activityLog', icon: Activity, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Account Mgmt', path: '/users', icon: Users, roles: ['SUPER_ADMIN'] },
   ];

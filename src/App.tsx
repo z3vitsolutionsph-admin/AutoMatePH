@@ -14,10 +14,17 @@ import { Dashboard } from './pages/Dashboard';
 import { ActivityLog } from './pages/ActivityLog';
 import { UserManagement } from './pages/UserManagement';
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { user, loading } = useAuth();
-  if (loading) return null;
+const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode, allowedRoles?: string[] }) => {
+  const { user, role, loading } = useAuth();
+  if (loading) return <div className="h-screen w-screen bg-[#0A0C10] flex items-center justify-center text-[#7A736E] font-mono">LOADING...</div>;
   if (!user) return <Navigate to="/login" replace />;
+  
+  // If allowedRoles is provided, check if user has required role
+  if (allowedRoles && role && !allowedRoles.includes(role)) {
+    // Redirect to POS as a safe fallback if they're a cashier or don't have access to current route
+    return <Navigate to={role === 'CASHIER' ? '/pos' : '/'} replace />;
+  }
+  
   return <>{children}</>;
 };
 
@@ -35,11 +42,31 @@ export default function App() {
               </ProtectedRoute>
             }
           >
-            <Route index element={<Dashboard />} />
-            <Route path="pos" element={<POS />} />
-            <Route path="inventory" element={<Inventory />} />
-            <Route path="activityLog" element={<ActivityLog />} />
-            <Route path="users" element={<UserManagement />} />
+            <Route index element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
+                <Dashboard />
+              </ProtectedRoute>
+            } />
+            <Route path="pos" element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER']}>
+                <POS />
+              </ProtectedRoute>
+            } />
+            <Route path="inventory" element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
+                <Inventory />
+              </ProtectedRoute>
+            } />
+            <Route path="activityLog" element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
+                <ActivityLog />
+              </ProtectedRoute>
+            } />
+            <Route path="users" element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN']}>
+                <UserManagement />
+              </ProtectedRoute>
+            } />
           </Route>
         </Routes>
       </BrowserRouter>
