@@ -9,9 +9,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Plus, Search, Edit2, ShieldAlert, UserX, UserCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
-import { initializeApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
+import { initializeApp, FirebaseApp } from 'firebase/app';
+import { getAuth, createUserWithEmailAndPassword, Auth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
+import { Timestamp, FieldValue } from 'firebase/firestore';
 
 interface UserData {
   id: string;
@@ -19,13 +20,13 @@ interface UserData {
   name: string;
   role: string;
   isActive: boolean;
-  createdAt: any;
-  updatedAt: any;
+  createdAt: Timestamp | FieldValue;
+  updatedAt: Timestamp | FieldValue;
 }
 
 // Ensure secondary app is initialized outside to prevent memory leak/re-initialization
-let secondaryApp: any = null;
-let secondaryAuth: any = null;
+let secondaryApp: FirebaseApp | null = null;
+let secondaryAuth: Auth | null = null;
 try {
   secondaryApp = initializeApp(firebaseConfig, "SecondaryAuthApp-" + Date.now());
   secondaryAuth = getAuth(secondaryApp);
@@ -109,7 +110,7 @@ export function UserManagement() {
       if (editingUser) {
         // Only update name and maybe role/isActive if we allow it via firestore.rules
         const userRef = doc(db, 'users', editingUser.id);
-        const updateData: any = {
+        const updateData: Record<string, any> = {
            name,
            updatedAt: serverTimestamp()
         };
@@ -147,9 +148,9 @@ export function UserManagement() {
       }
       setIsDialogOpen(false);
       resetForm();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving user:', error);
-      let errorMessage = error.message || 'Operation failed';
+      let errorMessage = (error as any).message || 'Operation failed';
       if (errorMessage.includes('email-already-in-use')) {
         errorMessage = 'This email is already registered';
       } else if (errorMessage.includes('weak-password')) {
@@ -169,8 +170,8 @@ export function UserManagement() {
            updatedAt: serverTimestamp()
        });
        toast.success(`User ${user.isActive ? 'disabled' : 'enabled'} successfully`);
-    } catch (error: any) {
-       handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+    } catch (error: unknown) {
+       handleFirestoreError(error as any, OperationType.UPDATE, `users/${user.id}`);
     }
   };
 
