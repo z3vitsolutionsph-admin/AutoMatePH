@@ -388,7 +388,15 @@ export function Inventory() {
 
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
 
-  const categories = useMemo(() => Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort(), [products]);
+  const categories = useMemo(() => {
+    const categorySet = new Set<string>();
+    for (const p of products) {
+      if (p.category) {
+        categorySet.add(p.category);
+      }
+    }
+    return Array.from(categorySet).sort();
+  }, [products]);
 
   const filteredProducts = useMemo(() => {
     let result = products;
