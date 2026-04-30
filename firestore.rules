@@ -101,7 +101,7 @@ service cloud.firestore {
       allow get: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin() || isStoreManager());
       allow list: if isSignedIn() && isSuperAdmin(); // Prevent PII Blanket Read
       
-      allow create: if (isSuperAdmin() || request.auth.uid == userId) 
+      allow create: if (isSuperAdmin() || (request.auth.uid == userId && incoming().role == 'CASHIER'))
         && isValidId(userId)
         && isValidUser(incoming())
         && incoming().createdAt == request.time
