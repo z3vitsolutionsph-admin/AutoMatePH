@@ -1,11 +1,13 @@
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
+export const OperationType = {
+  CREATE: 'create',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  LIST: 'list',
+  GET: 'get',
+  WRITE: 'write',
+} as const;
+
+export type OperationType = typeof OperationType[keyof typeof OperationType];
 
 interface FirestoreErrorInfo {
   error: string;
@@ -24,7 +26,7 @@ interface FirestoreErrorInfo {
   };
 }
 
-import { auth } from './firebase';
+import { auth } from './firebase.ts';
 import { toast } from 'sonner';
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
