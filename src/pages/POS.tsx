@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import { db, auth } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
@@ -25,6 +25,7 @@ interface Product {
   price: number;
   stock: number;
   category?: string;
+  imageUrl?: string;
 }
 
 interface CartItem extends Product {
@@ -64,38 +65,22 @@ export function POS() {
         if (pendingTxs.length > 0) {
           setIsSyncing(true);
           toast.success(`Syncing ${pendingTxs.length} offline transactions...`);
-
-          let totalSuccessCount = 0;
-          const BATCH_SIZE = 500;
-
-          for (let i = 0; i < pendingTxs.length; i += BATCH_SIZE) {
-            const chunk = pendingTxs.slice(i, i + BATCH_SIZE);
-            const batch = writeBatch(db);
-            const chunkIds: number[] = [];
-
-            for (const tx of chunk) {
-              const newDocRef = doc(collection(db, 'transactions'));
-              batch.set(newDocRef, {
+          let successCount = 0;
+          for (const tx of pendingTxs) {
+            try {
+              await addDoc(collection(db, 'transactions'), {
                 ...tx.transactionData,
                 createdAt: serverTimestamp(),
                 updatedAt: serverTimestamp()
               });
-              if (tx.id) chunkIds.push(tx.id);
-            }
-
-            try {
-              await batch.commit();
-              await dbLocal.transactions.bulkUpdate(
-                chunkIds.map(id => ({ key: id, changes: { status: 'synced' as const } }))
-              );
-              totalSuccessCount += chunk.length;
+              await dbLocal.transactions.update(tx.id!, { status: 'synced' });
+              successCount++;
             } catch (err) {
-              console.error("Failed to sync batch:", err);
+              console.error("Failed to sync specific tx:", err);
             }
           }
-
           setIsSyncing(false);
-          toast.success(`Offline synchronization complete. ${totalSuccessCount}/${pendingTxs.length} synced successfully.`);
+          toast.success(`Offline synchronization complete. ${successCount}/${pendingTxs.length} synced successfully.`);
         }
       } catch (e) {
         setIsSyncing(false);
@@ -526,17 +511,36 @@ export function POS() {
           {filteredProducts.map(product => (
             <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} key={product.id}>
               <Card 
-                className="bg-[#141210] border-[#3A3230] hover:border-[#FF6F00] cursor-pointer transition-colors relative overflow-hidden h-full flex flex-col justify-between"
+                className="bg-[#141210] border-[#3A3230] hover:border-[#FF6F00] cursor-pointer transition-all relative overflow-hidden h-full flex flex-col group"
                 onClick={() => addToCart(product)}
               >
-                <div className="absolute top-2 right-2 text-xs font-mono font-bold text-[#1D9E75]">
+                <div className="absolute top-2 right-2 text-xs font-mono font-bold text-[#1D9E75] bg-[#141210]/90 px-2 py-0.5 rounded shadow z-10 backdrop-blur-sm border border-[#3A3230]">
                   {product.stock} in stock
                 </div>
-                <CardContent className="p-4 pt-8">
-                  <div className="text-[#FAF7F2] font-medium leading-tight mb-2 truncate" title={product.name}>
+                
+                {product.imageUrl ? (
+                  <div className="w-full h-32 md:h-40 overflow-hidden bg-[#0A0C10] relative">
+                    <img 
+                      src={product.imageUrl} 
+                      alt={product.name} 
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-[#141210] to-transparent pointer-events-none" />
+                  </div>
+                ) : (
+                  <div className="w-full h-32 md:h-40 bg-[#0A0C10] flex flex-col items-center justify-center text-[#3A3230]">
+                    <div className="h-10 w-10 border-2 border-dashed border-[#3A3230] rounded-lg mb-2 opacity-50 flex items-center justify-center">
+                      <span className="text-[10px] uppercase font-bold">Image</span>
+                    </div>
+                  </div>
+                )}
+                
+                <CardContent className={`p-4 flex-1 flex flex-col justify-end ${product.imageUrl ? 'pt-2' : ''}`}>
+                  <div className="text-[#FAF7F2] font-medium leading-tight mb-2 line-clamp-2" title={product.name}>
                     {product.name}
                   </div>
-                  <div className="text-[#FF6F00] font-mono font-bold text-lg">
+                  <div className="text-[#FF6F00] font-mono font-bold text-lg mt-auto">
                     ₱{formatCurrency(product.price)}
                   </div>
                   <div className="text-[#7A736E] font-mono text-xs mt-1">

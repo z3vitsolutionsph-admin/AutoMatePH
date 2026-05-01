@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { db, auth } from '../lib/firebase';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { db, auth, storage } from '../lib/firebase';
 import { collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
@@ -18,6 +19,12 @@ import { useReactToPrint } from 'react-to-print';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 import { useDebounce } from '../hooks/useDebounce';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { PurchaseOrders } from '../components/PurchaseOrders';
+import imageCompression from 'browser-image-compression';
+import { GoogleGenAI } from '@google/genai';
+import ReactCrop, { type Crop } from 'react-image-crop';
+import 'react-image-crop/dist/ReactCrop.css';
 
 interface Product {
   id: string;
@@ -29,7 +36,7 @@ interface Product {
   minStock: number;
   category: string;
   description?: string;
-  location?: string;
+  imageUrl?: string;
 }
 
 export function Inventory() {
@@ -42,7 +49,6 @@ export function Inventory() {
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-  const [isBatchQrDialogOpen, setIsBatchQrDialogOpen] = useState(false);
   const { role } = useAuth();
   
   const qrPrintRef = useRef<HTMLDivElement>(null);
@@ -87,49 +93,6 @@ export function Inventory() {
     }
   };
 
-  const handleDownloadBatchQRPDF = async () => {
-    if (!batchQrPrintRef.current || selectedProductIds.length === 0) return;
-    
-    try {
-      // Temporarily ensure the ref is visible for toPng to capture correctly.
-      // (Using a grid or layout inside the dialog should work)
-      const dataUrl = await toPng(batchQrPrintRef.current, { pixelRatio: 2 });
-      
-      // We will export it as A4 format.
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4', 
-      });
-      
-      const imgProps = pdf.getImageProperties(dataUrl);
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-      
-      // If it's longer than a page, it might just run off. A better approach for multi-page 
-      // could be complex with html-to-image. For basic batch, we just put it on one long page or let it scale.
-      // To support multiple pages properly, generating a PDF from an image that is taller than A4 just cuts it off.
-      // So we'll adjust the height of the PDF to fit the image if it's tall.
-      if (pdfHeight > pdf.internal.pageSize.getHeight()) {
-        const customPdf = new jsPDF({
-          orientation: 'portrait',
-          unit: 'mm',
-          format: [210, Math.max(297, pdfHeight + 20)]
-        });
-        customPdf.addImage(dataUrl, 'PNG', 0, 10, pdfWidth, pdfHeight);
-        customPdf.save(`Batch_QR_Codes.pdf`);
-      } else {
-        pdf.addImage(dataUrl, 'PNG', 0, 10, pdfWidth, pdfHeight);
-        pdf.save(`Batch_QR_Codes.pdf`);
-      }
-      
-      toast.success('Batch PDF downloaded successfully');
-    } catch (error) {
-      console.error('Failed to generate batch PDF:', error);
-      toast.error('Failed to generate Batch PDF');
-    }
-  };
-
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
   // Form States
@@ -141,7 +104,22 @@ export function Inventory() {
   const [minStock, setMinStock] = useState('0');
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
-  const [locationStr, setLocationStr] = useState('');
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imageUrl, setImageUrl] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
+
+  // Cropper states
+  const [crop, setCrop] = useState<Crop>({
+    unit: '%',
+    x: 0,
+    y: 0,
+    width: 100,
+    height: 100
+  });
+  const [isCropDialogOpen, setIsCropDialogOpen] = useState(false);
+  const [cropSrc, setCropSrc] = useState<string>('');
+  const imageRef = useRef<HTMLImageElement | null>(null);
 
   // Scanner States
   const [isScanning, setIsScanning] = useState(false);
@@ -183,7 +161,8 @@ export function Inventory() {
       setMinStock(product.minStock.toString());
       setCategory(product.category);
       setDescription(product.description || '');
-      setLocationStr(product.location || '');
+      setImageUrl(product.imageUrl || '');
+      setImageFile(null);
     } else {
       setEditingProduct(null);
       setBarcode('');
@@ -194,7 +173,8 @@ export function Inventory() {
       setMinStock('0');
       setCategory('');
       setDescription('');
-      setLocationStr('');
+      setImageUrl('');
+      setImageFile(null);
     }
     setIsDialogOpen(true);
     setIsDetailsDialogOpen(false);
@@ -292,6 +272,96 @@ export function Inventory() {
     setIsScanning(false);
   };
 
+  const generateAIAIDescription = async () => {
+    if (!name) {
+      toast.error('Please enter a product name first before generating a description.');
+      return;
+    }
+    
+    // To generate based on image, we need an image URL or File
+    let base64Image = '';
+    let mimeType = '';
+    if (imageFile) {
+        try {
+           const reader = new FileReader();
+           const fileData = await new Promise<string>((resolve) => {
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(imageFile);
+           });
+           mimeType = fileData.substring(5, fileData.indexOf(';'));
+           base64Image = fileData.substring(fileData.indexOf(',') + 1);
+        } catch(e) {}
+    } else if (imageUrl && imageUrl.startsWith('data:image')) {
+        mimeType = imageUrl.substring(5, imageUrl.indexOf(';'));
+        base64Image = imageUrl.substring(imageUrl.indexOf(',') + 1);
+    }
+
+    try {
+      setIsGeneratingDesc(true);
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      const prompt = `Write a short, engaging description (max 2 sentences) for a product named "${name}"${category ? ` in the ${category} category` : ''}. Keep it concise and professional.`;
+      
+      let contents: any = prompt;
+      if (base64Image) {
+        contents = {
+          parts: [
+            { text: prompt + " Here is an image of the product to help you write the description." },
+            { inlineData: { mimeType, data: base64Image } }
+          ]
+        };
+      }
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: contents
+      });
+      
+      if (response.text) {
+        setDescription(response.text.trim());
+        toast.success("Description generated");
+      }
+    } catch (err) {
+      toast.error('Failed to generate description. Ensure Gemini key is set.');
+      console.error('Gemini error:', err);
+    } finally {
+      setIsGeneratingDesc(false);
+    }
+  };
+
+  const getCroppedImg = async () => {
+    if (!imageRef.current || !crop.width || !crop.height) return;
+    
+    const canvas = document.createElement('canvas');
+    const scaleX = imageRef.current.naturalWidth / imageRef.current.width;
+    const scaleY = imageRef.current.naturalHeight / imageRef.current.height;
+    
+    canvas.width = crop.width * scaleX;
+    canvas.height = crop.height * scaleY;
+    
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    ctx.drawImage(
+      imageRef.current,
+      crop.x * scaleX,
+      crop.y * scaleY,
+      crop.width * scaleX,
+      crop.height * scaleY,
+      0,
+      0,
+      crop.width * scaleX,
+      crop.height * scaleY
+    );
+    
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const file = new File([blob], 'cropped.png', { type: 'image/png' });
+      setImageFile(file);
+      setImageUrl('');
+      setIsCropDialogOpen(false);
+    }, 'image/png');
+  };
+
   const handleSave = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!barcode || !name || !price || !cost || !stock || !category) {
@@ -327,10 +397,12 @@ export function Inventory() {
       minStock: parseInt(minStock, 10) || 0,
       category,
       description,
-      location: locationStr,
+      imageUrl: imageUrl,
     };
 
     try {
+      let productId = editingProduct?.id;
+
       if (editingProduct) {
         await updateDoc(doc(db, 'products', editingProduct.id), {
           ...productData,
@@ -344,11 +416,12 @@ export function Inventory() {
         });
         toast.success('Product updated');
       } else {
-        await addDoc(collection(db, 'products'), {
+        const docRef = await addDoc(collection(db, 'products'), {
           ...productData,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp()
         });
+        productId = docRef.id;
         await addDoc(collection(db, 'activityLogs'), {
           type: 'INBOUND_DELIVERY',
           userId: auth.currentUser?.uid || 'Unknown',
@@ -358,6 +431,35 @@ export function Inventory() {
         toast.success('Product added');
       }
       closeDialog();
+
+      // Background image upload using Base64 to bypass Storage rules limit
+      if (imageFile && productId) {
+        const options = {
+          maxSizeMB: 0.2, // Compress significantly to fit well within Firestore 1MB limit
+          maxWidthOrHeight: 600,
+          useWebWorker: true,
+        };
+        imageCompression(imageFile, options).then(async (compressedFile) => {
+          const reader = new FileReader();
+          reader.readAsDataURL(compressedFile);
+          reader.onloadend = async () => {
+            const base64data = reader.result as string;
+            try {
+              await updateDoc(doc(db, 'products', productId!), { 
+                imageUrl: base64data,
+                updatedAt: serverTimestamp()
+              });
+            } catch (err) {
+              console.error('Error saving image to product:', err);
+              toast.error('Image compression succeeded, but failed to save to product.');
+            }
+          };
+        }).catch(err => {
+          console.error('Error processing image:', err);
+          toast.error('Image processing failed, but product was saved.');
+        });
+      }
+
     } catch (error) {
       handleFirestoreError(error, editingProduct ? OperationType.UPDATE : OperationType.CREATE, 'products');
     } finally {
@@ -475,11 +577,20 @@ export function Inventory() {
           <h2 className="text-2xl font-bold tracking-tight text-[#FAF7F2]">Inventory Management</h2>
           <p className="text-sm font-mono text-[#7A736E]">Real-time stock tracking and adjustments</p>
         </div>
-        
-        <div className="flex items-center gap-2">
+      </div>
+
+      <Tabs defaultValue="products" className="w-full">
+        <TabsList className="bg-[#141210] border border-[#3A3230] p-1 mb-6">
+          <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black">Products</TabsTrigger>
+          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black">Purchase Orders</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="products" className="space-y-6">
+          <div className="flex justify-between items-center flex-wrap gap-4">
+             <div className="flex items-center gap-2 flex-wrap ml-auto">
           {selectedProductIds.length > 0 && (
-            <Button onClick={() => setIsBatchQrDialogOpen(true)} variant="outline" className="border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs">
-              <QrCode className="mr-2 h-4 w-4" /> Generate Batch QR ({selectedProductIds.length})
+            <Button onClick={() => handlePrintBatchQR()} variant="outline" className="border-[#1D9E75] text-[#1D9E75] hover:bg-[#1D9E75] hover:text-white font-mono text-xs">
+              <Printer className="mr-2 h-4 w-4" /> Print Batch ({selectedProductIds.length})
             </Button>
           )}
           <Button onClick={handleDownloadCSV} variant="outline" className="border-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2] font-mono text-xs">
@@ -630,21 +741,69 @@ export function Inventory() {
                 </div>
                 <div className="col-span-2 space-y-2">
                   <label className="text-xs font-mono text-[#7A736E] uppercase">Description</label>
-                  <Input 
-                    name="description" 
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
-                  />
+                  <div className="flex gap-2 relative">
+                    <Input 
+                      name="description" 
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00] pr-10" 
+                    />
+                    <Button 
+                      type="button" 
+                      onClick={generateAIAIDescription} 
+                      disabled={isGeneratingDesc || !name}
+                      variant="ghost" 
+                      size="icon" 
+                      title="Generate AI Description"
+                      className="absolute right-0 top-0 h-10 w-10 text-[#FF6F00] hover:bg-[#FF6F00]/10"
+                    >
+                      <Wand2 className={`h-4 w-4 ${isGeneratingDesc ? 'animate-spin' : ''}`} />
+                    </Button>
+                  </div>
                 </div>
                 <div className="col-span-2 space-y-2">
-                  <label className="text-xs font-mono text-[#7A736E] uppercase">Location</label>
-                  <Input 
-                    name="location" 
-                    value={locationStr}
-                    onChange={(e) => setLocationStr(e.target.value)}
-                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
-                  />
+                  <label className="text-xs font-mono text-[#7A736E] uppercase">Product Image</label>
+                  <div className="flex flex-col gap-4">
+                    <div className="flex items-center gap-4">
+                      {(imageFile || imageUrl) && (
+                        <div className="relative w-16 h-16 rounded-md border border-[#3A3230] overflow-hidden bg-[#0A0C10]">
+                          <img 
+                            src={imageFile ? URL.createObjectURL(imageFile) : imageUrl} 
+                            alt="Product preview" 
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      )}
+                      <div className="flex-1 space-y-2">
+                        <Input 
+                          type="file" 
+                          accept="image/*"
+                          onChange={(e) => {
+                            if (e.target.files && e.target.files[0]) {
+                              const file = e.target.files[0];
+                              setImageFile(file);
+                              const url = URL.createObjectURL(file);
+                              setCropSrc(url);
+                              setIsCropDialogOpen(true);
+                            }
+                          }}
+                          className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00] w-full text-sm text-[#FAF7F2] file:mr-4 file:py-1 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-[#1A1614] file:text-[#FAF7F2] hover:file:bg-[#3A3230]" 
+                        />
+                        {imageFile && (
+                          <Button 
+                            type="button" 
+                            onClick={() => {
+                              setCropSrc(URL.createObjectURL(imageFile));
+                              setIsCropDialogOpen(true);
+                            }}
+                            className="w-full bg-[#FAF7F2] text-black hover:bg-gray-200 text-xs font-mono"
+                          >
+                            <Edit2 className="h-3 w-3 mr-2" /> Crop/Resize Image
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <div className="col-span-2 mt-4">
                   <Button 
@@ -727,6 +886,7 @@ export function Inventory() {
                   />
                 </TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[100px]">BARCODE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[60px]">IMAGE</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[150px]">PRODUCT NAME</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">CATEGORY</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider text-right">PRICE</TableHead>
@@ -752,6 +912,17 @@ export function Inventory() {
                     />
                   </TableCell>
                   <TableCell className="text-[#7A736E] whitespace-nowrap">{product.barcode}</TableCell>
+                  <TableCell>
+                    {product.imageUrl ? (
+                      <div className="w-8 h-8 rounded shrink-0 overflow-hidden bg-[#0A0C10] border border-[#3A3230]">
+                        <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="w-8 h-8 rounded shrink-0 bg-[#0A0C10] border border-[#3A3230] flex items-center justify-center text-[#3A3230]">
+                        <Camera className="w-4 h-4" />
+                      </div>
+                    )}
+                  </TableCell>
                   <TableCell className="text-[#FAF7F2] font-sans whitespace-nowrap">{product.name}</TableCell>
                   <TableCell>
                     <span className="text-[#7A736E] whitespace-nowrap">
@@ -774,7 +945,7 @@ export function Inventory() {
               ))}
               {filteredProducts.length === 0 && (
                <TableRow className="border-[#3A3230] bg-[#141210]">
-                 <TableCell colSpan={5} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
+                 <TableCell colSpan={7} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
                     NO PRODUCTS FOUND
                  </TableCell>
                </TableRow>
@@ -841,6 +1012,13 @@ export function Inventory() {
           
           {selectedProduct && (
             <div className="py-4 space-y-4 font-mono">
+              {selectedProduct.imageUrl && (
+                <div className="flex justify-center mb-6">
+                  <div className="w-48 h-48 rounded-lg overflow-hidden border border-[#3A3230] bg-[#0A0C10]">
+                    <img src={selectedProduct.imageUrl} alt={selectedProduct.name} className="w-full h-full object-cover" />
+                  </div>
+                </div>
+              )}
               <div className="flex justify-between border-b border-[#3A3230] pb-2">
                 <span className="text-[#7A736E] text-xs uppercase tracking-widest">Name</span>
                 <span className="text-[#FAF7F2] font-sans font-bold">{selectedProduct.name}</span>
@@ -865,13 +1043,6 @@ export function Inventory() {
                 <span className="text-[#7A736E] text-xs uppercase tracking-widest">Stock</span>
                 <span className="text-[#FAF7F2]">{selectedProduct.stock} (Min: {selectedProduct.minStock})</span>
               </div>
-              
-              {selectedProduct.location && (
-                <div className="flex justify-between border-b border-[#3A3230] pb-2">
-                  <span className="text-[#7A736E] text-xs uppercase tracking-widest">Location</span>
-                  <span className="text-[#FAF7F2]">{selectedProduct.location}</span>
-                </div>
-              )}
               
               <div className="pt-2">
                 <span className="text-[#7A736E] text-xs uppercase tracking-widest block mb-1">Description</span>
@@ -985,73 +1156,106 @@ export function Inventory() {
         </DialogContent>
       </Dialog>
 
-      {/* Batch QR Code Dialog */}
-      <Dialog open={isBatchQrDialogOpen} onOpenChange={setIsBatchQrDialogOpen}>
-        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[800px] max-h-[80vh] overflow-hidden flex flex-col">
+      {/* Batch QR Code Hidden Print Container */}
+      <div className="fixed overflow-hidden h-0 w-0" style={{ left: '-10000px', top: '-10000px' }}>
+        <div 
+          ref={batchQrPrintRef}
+          className="bg-white p-8 w-[210mm]"
+        >
+          <style type="text/css" media="print">
+            {`
+              @page { size: A4 portrait; margin: 10mm; }
+              body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+              .sticker-grid {
+                display: grid !important;
+                grid-template-columns: repeat(3, 1fr) !important;
+                gap: 10mm !important;
+              }
+              .sticker-item {
+                page-break-inside: avoid;
+                border: 1px dashed #cccccc;
+                padding: 10px;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100%;
+              }
+            `}
+          </style>
+          <h2 className="text-black text-center font-bold text-xl mb-6">Batch Product QR Codes</h2>
+          <div className="sticker-grid grid grid-cols-3 gap-4">
+            {products.filter(p => selectedProductIds.includes(p.id)).map(product => (
+              <div key={`print-${product.id}`} className="sticker-item border border-dashed border-gray-300 rounded-lg p-4 flex flex-col items-center">
+                <div className="text-center w-full mb-3">
+                  <h3 className="text-black font-sans font-bold text-sm leading-tight truncate px-1 w-full">
+                    {product.name}
+                  </h3>
+                  <p className="text-gray-500 font-mono text-[10px] mt-1">
+                    {product.category}
+                  </p>
+                </div>
+                <QRCodeSVG 
+                  value={product.barcode} 
+                  size={100}
+                  level="Q"
+                  includeMargin={false}
+                />
+                <div className="text-center w-full mt-3">
+                  <p className="text-black font-mono text-xs font-bold tracking-[0.1em]">
+                    {product.barcode}
+                  </p>
+                  <p className="text-gray-600 font-sans text-xs font-semibold mt-1">
+                    ₱{formatCurrency(product.price)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+        </TabsContent>
+        <TabsContent value="purchase_orders">
+          <PurchaseOrders products={products} />
+        </TabsContent>
+      </Tabs>
+      <Dialog open={isCropDialogOpen} onOpenChange={setIsCropDialogOpen}>
+        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] max-w-xl">
           <DialogHeader>
-            <DialogTitle className="text-[#FF6F00] flex items-center gap-2">
-              <QrCode className="h-5 w-5" /> Batch QR Codes ({selectedProductIds.length})
+            <DialogTitle className="text-[#FF6F00] font-mono tracking-widest uppercase text-sm">
+              Crop Image
             </DialogTitle>
           </DialogHeader>
-          <div className="flex-1 overflow-y-auto p-4 bg-[#0A0C10] border border-[#3A3230] rounded-md custom-scrollbar">
-            <div 
-              ref={batchQrPrintRef}
-              className="bg-white p-6 grid grid-cols-2 md:grid-cols-3 gap-6"
-            >
-              <style type="text/css" media="print">
-                {`
-                  @page { size: auto; margin: 10mm; }
-                  body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-                `}
-              </style>
-              {products.filter(p => selectedProductIds.includes(p.id)).map(product => (
-                <div key={product.id} className="flex flex-col items-center justify-center p-4 border border-dashed border-gray-300 rounded-lg">
-                  <div className="text-center w-full mb-3">
-                    <h3 className="text-black font-sans font-bold text-sm leading-tight truncate px-1 w-full">
-                      {product.name}
-                    </h3>
-                    <p className="text-gray-500 font-mono text-[10px] mt-1">
-                      {product.category}
-                    </p>
-                  </div>
-                  <QRCodeSVG 
-                    value={product.barcode} 
-                    size={100}
-                    level="Q"
-                    includeMargin={false}
-                  />
-                  <div className="text-center w-full mt-3">
-                    <p className="text-black font-mono text-xs font-bold tracking-[0.1em]">
-                      {product.barcode}
-                    </p>
-                    <p className="text-gray-600 font-sans text-xs font-semibold mt-1">
-                      ₱{formatCurrency(product.price)}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <div className="flex flex-col items-center gap-4 py-4 max-h-[60vh] overflow-auto">
+            {cropSrc && (
+              <ReactCrop
+                crop={crop}
+                onChange={(_, percentCrop) => setCrop(percentCrop)}
+                className="max-w-full bg-[#0A0C10] border border-[#3A3230] rounded-md"
+              >
+                <img
+                  src={cropSrc}
+                  ref={imageRef}
+                  alt="Crop preview"
+                  className="max-w-full h-auto max-h-[50vh]"
+                />
+              </ReactCrop>
+            )}
           </div>
-          <div className="flex flex-col sm:flex-row justify-end gap-3 pt-4 border-t border-[#3A3230]">
-            <Button 
-              variant="ghost" 
-              onClick={() => setIsBatchQrDialogOpen(false)}
-              className="text-[#FAF7F2] hover:bg-[#1A1614] font-mono text-xs uppercase tracking-widest sm:flex-1"
+          <div className="flex justify-end gap-3 mt-4">
+            <Button
+              variant="ghost"
+              onClick={() => setIsCropDialogOpen(false)}
+              className="text-[#FAF7F2] hover:bg-[#1A1614]"
             >
-              Close
+              Cancel
             </Button>
-            <Button 
-              onClick={handleDownloadBatchQRPDF}
-              variant="outline"
-              className="border-[#FF6F00] text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black font-mono text-xs uppercase tracking-widest sm:flex-1"
+            <Button
+              onClick={getCroppedImg}
+              className="bg-[#1D9E75] hover:bg-[#1D9E75]/80 text-[#FAF7F2]"
             >
-              <Download className="h-4 w-4 mr-2" /> Download PDF
-            </Button>
-            <Button 
-              onClick={() => handlePrintBatchQR()}
-              className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest sm:flex-1"
-            >
-              <Printer className="h-4 w-4 mr-2" /> Print Batch
+              Apply Crop
             </Button>
           </div>
         </DialogContent>

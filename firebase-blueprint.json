@@ -28,7 +28,7 @@
         "stock": { "type": "number" },
         "minStock": { "type": "number" },
         "category": { "type": "string" },
-        "locationId": { "type": "string" },
+        "imageUrl": { "type": "string" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
       },
@@ -61,6 +61,24 @@
       },
       "required": ["type", "userId", "details", "timestamp"]
     }
+    "PurchaseOrder": {
+      "title": "Purchase Order",
+      "description": "A record of ordered items from a supplier",
+      "type": "object",
+      "properties": {
+        "supplierName": { "type": "string" },
+        "supplierContact": { "type": "string" },
+        "orderDate": { "type": "string" },
+        "expectedDeliveryDate": { "type": "string" },
+        "items": { "type": "array" },
+        "status": { "type": "string", "enum": ["PENDING", "DELIVERED", "CANCELLED"] },
+        "totalAmount": { "type": "number" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["supplierName", "orderDate", "expectedDeliveryDate", "items", "status", "totalAmount", "createdBy", "createdAt", "updatedAt"]
+    }
   },
   "firestore": {
     "/users/{userId}": {
@@ -78,6 +96,10 @@
     "/activityLogs/{logId}": {
       "schema": { "$ref": "#/entities/ActivityLog" },
       "description": "System audit trail"
+    },
+    "/purchaseOrders/{orderId}": {
+      "schema": { "$ref": "#/entities/PurchaseOrder" },
+      "description": "Purchase orders from suppliers"
     }
   }
 }

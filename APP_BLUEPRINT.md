@@ -34,6 +34,7 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
    - Real-time stock status monitoring.
    - Export Inventory to CSV.
    - Generate, Print, and Download QR/Barcode formats (Sticker PDFs).
+   - **Purchase Orders**: track purchase orders, integrate with stock levels upon delivery.
 4. **Activity Logs**:
    - Audit trail for `STOCK_ADJUSTMENT`, `SALE`, and `INBOUND_DELIVERY`.
    - Table to monitor staff actions and system events.
@@ -70,10 +71,20 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
 - **status** (string): `COMPLETED`, `VOIDED`.
 
 ### ActivityLog (`/activityLogs/{logId}`)
-- **type** (string): `STOCK_ADJUSTMENT`, `SALE`, `INBOUND_DELIVERY`.
+- **type** (string): `STOCK_ADJUSTMENT`, `SALE`, `INBOUND_DELIVERY`, `PURCHASE_ORDER`.
 - **userId** (string): The user who triggered the action.
 - **details** (string): Contextual string explaining the event.
 - **timestamp** (string): ISO string or Firebase Timestamp.
+
+### PurchaseOrder (`/purchaseOrders/{orderId}`)
+- **supplierName** (string): Name of the supplier.
+- **supplierContact** (string): Optional contact detailing.
+- **orderDate** (string): Date when the order was made.
+- **expectedDeliveryDate** (string): Expected arrival date.
+- **items** (array): Snapshot of ordered products `{ productId, productName, quantity, cost }`.
+- **status** (string): `PENDING`, `DELIVERED`, `CANCELLED`.
+- **totalAmount** (number): Total cost of the order.
+- **createdBy** (string): User ID of the creator.
 
 ## File Structure Guidelines
 - `/src/pages`: Feature-based React pages (`Dashboard.tsx`, `POS.tsx`, `Inventory.tsx`, `ActivityLog.tsx`).

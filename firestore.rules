@@ -70,8 +70,8 @@ service cloud.firestore {
         && data.stock is number && data.stock >= 0
         && (data.get('minStock', 0) is number)
         && (data.get('category', '') is string)
-        && (data.get('locationId', '') is string)
         && (data.get('description', '') is string)
+        && (data.get('imageUrl', '') is string)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -89,10 +89,24 @@ service cloud.firestore {
 
     function isValidActivityLog(data) {
       return data.keys().hasAll(["type", "userId", "details", "timestamp"])
-        && data.type in ["STOCK_ADJUSTMENT", "SALE", "INBOUND_DELIVERY"]
+        && data.type in ["STOCK_ADJUSTMENT", "SALE", "INBOUND_DELIVERY", "PURCHASE_ORDER"]
         && data.userId is string
         && data.details is string && data.details.size() <= 1000
         && data.timestamp is timestamp;
+    }
+
+    function isValidPurchaseOrder(data) {
+      return data.keys().hasAll(["supplierName", "orderDate", "expectedDeliveryDate", "items", "status", "createdBy", "totalAmount", "createdAt", "updatedAt"])
+        && data.supplierName is string && data.supplierName.size() > 0 && data.supplierName.size() <= 200
+        && (data.get('supplierContact', '') is string)
+        && data.orderDate is string && data.orderDate.size() <= 50
+        && data.expectedDeliveryDate is string && data.expectedDeliveryDate.size() <= 50
+        && data.items is list && data.items.size() > 0 && data.items.size() <= 200
+        && data.status in ["PENDING", "DELIVERED", "CANCELLED"]
+        && data.createdBy is string
+        && data.totalAmount is number && data.totalAmount >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
     
     // --- COLLECTIONS ---
@@ -133,7 +147,7 @@ service cloud.firestore {
       allow update: if (isStoreManager() && 
           incoming().diff(existing()).affectedKeys().hasOnly([
             'barcode', 'name', 'price', 'cost', 'stock', 'minStock', 
-            'category', 'locationId', 'description', 'updatedAt'
+            'category', 'description', 'imageUrl', 'updatedAt'
           ])
         ) || (isCashierOrHigher() &&
           incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'updatedAt'])
@@ -180,6 +194,27 @@ service cloud.firestore {
         
       allow update: if false; // Immutable
       allow delete: if false; // Immutable
+    }
+
+    match /purchaseOrders/{orderId} {
+      allow get: if isStoreManager();
+      allow list: if isStoreManager();
+      
+      allow create: if isStoreManager()
+        && isValidId(orderId)
+        && isValidPurchaseOrder(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if isStoreManager()
+        && isValidId(orderId)
+        && isValidPurchaseOrder(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && existing().status == 'PENDING'
+        && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'expectedDeliveryDate']);
+        
+      allow delete: if false;
     }
   }
 }

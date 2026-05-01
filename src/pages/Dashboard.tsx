@@ -445,25 +445,71 @@ export function Dashboard() {
                   <span className="text-sm">{salesError}</span>
                 </div>
               ) : salesByCategory.length > 0 ? (
-                <ResponsiveContainer width="100%" height={280}>
+                <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
+                    <defs>
+                      <filter id="shadow3d" x="-20%" y="-20%" width="140%" height="140%">
+                        <feDropShadow dx="0" dy="12" stdDeviation="5" floodOpacity="0.6" floodColor="#000000" />
+                      </filter>
+                      {salesByCategory.map((entry, index) => (
+                        <linearGradient id={`topGrad-${index}`} key={`top-${index}`} x1="0%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor={COLORS[index % COLORS.length]} stopOpacity={1} />
+                          <stop offset="100%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.7} />
+                        </linearGradient>
+                      ))}
+                      {salesByCategory.map((entry, index) => (
+                        <linearGradient id={`sideGrad-${index}`} key={`side-${index}`} x1="0%" y1="0%" x2="0%" y2="100%">
+                          <stop offset="0%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.4} />
+                          <stop offset="100%" stopColor="#000000" stopOpacity={0.7} />
+                        </linearGradient>
+                      ))}
+                    </defs>
+
+                    {/* Shadow & 3D Base (Side Layer) */}
                     <Pie
                       data={salesByCategory}
                       cx="50%"
                       cy="48%"
-                      innerRadius={65}
+                      innerRadius={60}
                       outerRadius={90}
                       paddingAngle={6}
                       dataKey="value"
                       stroke="none"
-                      cornerRadius={4}
+                      cornerRadius={6}
+                      filter="url(#shadow3d)"
+                      isAnimationActive={true}
                     >
                       {salesByCategory.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        <Cell key={`side-cell-${index}`} fill={`url(#sideGrad-${index})`} style={{ pointerEvents: 'none' }} />
                       ))}
                     </Pie>
+
+                    {/* Top Surface Layer */}
+                    <Pie
+                      data={salesByCategory}
+                      cx="50%"
+                      cy="44%"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={6}
+                      dataKey="value"
+                      stroke="none"
+                      cornerRadius={6}
+                      isAnimationActive={true}
+                    >
+                      {salesByCategory.map((entry, index) => (
+                        <Cell 
+                          key={`top-cell-${index}`} 
+                          fill={`url(#topGrad-${index})`} 
+                          stroke="rgba(255,255,255,0.15)"
+                          strokeWidth={1}
+                          style={{ filter: 'drop-shadow(0px 1px 1px rgba(255,255,255,0.2))' }}
+                        />
+                      ))}
+                    </Pie>
+
                     <Tooltip 
-                      contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.5)' }}
+                      contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6)' }}
                       itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px' }}
                       formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
                       labelStyle={{ display: 'none' }}

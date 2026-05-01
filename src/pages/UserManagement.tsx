@@ -152,7 +152,7 @@ export function UserManagement() {
            updatedAt: serverTimestamp()
         };
         
-        if (currentUserRole === 'SUPER_ADMIN' || currentUserRole === 'STORE_MANAGER') {
+        if (currentUserRole === 'SUPER_ADMIN') {
             updateData.role = role;
             updateData.isActive = isActive;
         }
