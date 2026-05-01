@@ -220,7 +220,7 @@ export function POS() {
           videoRef.current, 
           handleResult
         );
-      } catch (err: any) {
+      } catch (err: unknown) {
         // Fallback to any camera if environment facing fails
         console.warn('Failed to start environment camera, falling back to default:', err);
         await codeReaderRef.current.decodeFromConstraints(
@@ -229,18 +229,22 @@ export function POS() {
           handleResult
         );
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Camera initialization error:', err);
       let errorMessage = 'Could not start camera. Please check permissions.';
-      if (err?.name === 'NotAllowedError') {
-        errorMessage = 'Camera access was denied. Please grant permissions in your browser.';
-      } else if (err?.name === 'NotFoundError') {
-        errorMessage = 'No camera found on this device.';
-      } else if (err?.name === 'NotReadableError') {
-        errorMessage = 'Camera is already in use by another application.';
-      } else if (err?.message) {
-        errorMessage = `Camera error: ${err.message}`;
+
+      if (err instanceof Error) {
+        if (err.name === 'NotAllowedError') {
+          errorMessage = 'Camera access was denied. Please grant permissions in your browser.';
+        } else if (err.name === 'NotFoundError') {
+          errorMessage = 'No camera found on this device.';
+        } else if (err.name === 'NotReadableError') {
+          errorMessage = 'Camera is already in use by another application.';
+        } else if (err.message) {
+          errorMessage = `Camera error: ${err.message}`;
+        }
       }
+
       toast.error(errorMessage);
       setIsScanning(false);
     }
