@@ -82,5 +82,10 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
 - `/src/contexts`: Global state providers (`AuthContext.tsx`).
 - `/src/lib`: Utilities (`utils.ts`, `firestore-error.ts`).
 
+## Testing Strategy
+- **Unit Testing**: Pure utility functions and complex logic are tested using the native Node.js test runner (`node:test`).
+- **Co-location**: Test files are co-located with their source files using the `.test.ts` extension (e.g., `src/lib/utils.test.ts`).
+- **Execution**: Tests are executed via `node --experimental-strip-types <path/to/test>`.
+
 ## Rules for AI Agents
 Whenever you modify files, add collections, alter schemas, or introduce entirely new feature sets, **you must update this file simultaneously** to retain accuracy.
