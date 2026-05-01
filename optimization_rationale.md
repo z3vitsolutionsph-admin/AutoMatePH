@@ -18,3 +18,21 @@ This leads to:
 - **Reduced Sync Time**: Synchronizing 100 transactions will take roughly the time of one batch operation instead of 100 sequential operations.
 - **Improved Reliability**: Atomic batches ensure that either all transactions in a batch are synced or none (though in this case we are creating new docs, so it's mostly about efficiency).
 - **Lower Resource Usage**: Fewer network requests and database transactions reduce CPU and battery consumption on mobile devices.
+
+# Optimization Rationale: N+1 Query in Checkout Process
+
+## Current Issue
+The online checkout logic in `src/pages/POS.tsx` currently performs multiple sequential Firestore operations:
+1. One `addDoc` to create the transaction.
+2. Multiple `updateDoc` calls in a loop (one for each item in the cart) to update product stock.
+3. One `addDoc` to log the activity.
+
+For a cart with `N` items, this results in `N + 2` sequential network round-trips. This causes a noticeable delay in the checkout process, especially on slower connections or with larger carts.
+
+## Proposed Optimization
+Refactor the logic to use a Firestore `writeBatch`. This allows us to bundle the transaction creation, all stock updates, and the activity log into a single atomic operation.
+
+## Expected Impact
+- **Performance**: Reduces the number of network round-trips from `N + 2` to exactly 1.
+- **Atomicity**: Ensures that either the entire checkout process succeeds (transaction created, stocks updated, activity logged) or none of it does, preventing partial state updates.
+- **User Experience**: Makes the "Confirm Transaction" action feel significantly faster and more responsive.
