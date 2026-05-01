@@ -185,10 +185,11 @@ export function UserManagement() {
       }
       setIsDialogOpen(false);
       resetForm();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving user:', error);
-      const errorCode = error.code || '';
-      let errorMessage = error.message || 'Operation failed';
+      const errorCode = (error as any)?.code || '';
+      const message = (error as any)?.message || '';
+      let errorMessage = message || 'Operation failed';
       
       if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('email-already-in-use')) {
         errorMessage = 'This email is already registered';
@@ -216,7 +217,7 @@ export function UserManagement() {
            updatedAt: serverTimestamp()
        });
        toast.success(`User ${user.isActive ? 'disabled' : 'enabled'} successfully`);
-    } catch (error: any) {
+    } catch (error: unknown) {
        handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
     }
   };
@@ -231,7 +232,7 @@ export function UserManagement() {
       await deleteDoc(doc(db, 'users', user.id));
       toast.success(`User ${user.name} deleted successfully`);
       setDeleteConfirmationUser(null);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error deleting user:', error);
       handleFirestoreError(error, OperationType.DELETE, `users/${user.id}`);
     } finally {

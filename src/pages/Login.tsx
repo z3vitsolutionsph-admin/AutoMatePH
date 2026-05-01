@@ -45,9 +45,10 @@ export function Login() {
       setIsLoading(true);
       await signInWithGoogle();
       toast.success('Successfully authenticated');
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      toast.error(error.message || 'Failed to sign in with Google');
+      const errorMessage = error instanceof Error ? error.message : 'Failed to sign in with Google';
+      toast.error(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -147,10 +148,11 @@ export function Login() {
         await signUp(cleanEmail, password, cleanName, role);
         toast.success('Successfully registered and logged in');
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(error);
-      const errorCode = error.code || '';
-      let errorMessage = error.message || 'Authentication failed';
+      const errorCode = (error as any)?.code || '';
+      const message = (error as any)?.message || '';
+      let errorMessage = message || 'Authentication failed';
       if (errorCode === 'auth/invalid-credential' || errorMessage.includes('invalid-credential')) {
         errorMessage = 'Invalid email or password';
         setEmailError('Invalid email or password');

@@ -200,9 +200,9 @@ AI:`;
       });
 
       setMessages(prev => [...prev, { role: 'model', text: response.text || 'No response.' }]);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("AI Foresight Error:", err);
-      const errMsg = err.message || 'FAILED TO CONNECT TO CORE INTELLIGENCE';
+      const errMsg = err instanceof Error ? err.message : 'FAILED TO CONNECT TO CORE INTELLIGENCE';
       setMessages(prev => [...prev, { role: 'error', text: `[SYSTEM DIAGNOSTIC] ${errMsg}` }]);
     } finally {
       setIsTyping(false);
