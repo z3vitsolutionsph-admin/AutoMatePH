@@ -15,6 +15,7 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
   - `react-to-print` for printing functionality
   - `recharts` for Dashboard charts
   - `@google/genai` (Gemini 2.5 Flash) for Foresight AI Terminal
+- **Testing**: Vitest, React Testing Library, JSDOM
 
 ## Core Features
 1. **Dashboard**: 
