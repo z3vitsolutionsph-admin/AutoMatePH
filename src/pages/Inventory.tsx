@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { db, auth } from '../lib/firebase';
 import { collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
-import { formatCurrency } from '../lib/utils';
+import { formatCurrency, playBeep } from '../lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -208,26 +208,6 @@ export function Inventory() {
   const generateBarcode = () => {
     const timestamp = Date.now().toString();
     setBarcode(timestamp);
-  };
-
-  const playBeep = () => {
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      
-      oscillator.type = 'sine';
-      oscillator.frequency.value = 800;
-      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-      
-      oscillator.start();
-      setTimeout(() => oscillator.stop(), 100);
-    } catch (e) {
-      console.error("Audio beep failed", e);
-    }
   };
 
   const startScanner = async () => {
