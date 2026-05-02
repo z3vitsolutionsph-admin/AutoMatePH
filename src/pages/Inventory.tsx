@@ -492,11 +492,19 @@ export function Inventory() {
 
   const categories = useMemo(() => Array.from(new Set(products.map(p => p.category))).filter(Boolean).sort(), [products]);
 
+  const [stockFilter, setStockFilter] = useState('All');
+
   const filteredProducts = useMemo(() => {
-    let result = products;
+    let result = [...products];
 
     if (selectedCategory !== 'All') {
       result = result.filter(p => p.category === selectedCategory);
+    }
+
+    if (stockFilter === 'LowStock') {
+      result = result.filter(p => p.stock <= p.minStock && p.stock > 0);
+    } else if (stockFilter === 'OutOfStock') {
+      result = result.filter(p => p.stock === 0);
     }
 
     if (debouncedSearchQuery) {
@@ -505,10 +513,12 @@ export function Inventory() {
         threshold: 0.3,
       });
       result = fuse.search(debouncedSearchQuery).map(res => res.item);
+    } else {
+      result.sort((a, b) => a.name.localeCompare(b.name));
     }
 
     return result;
-  }, [products, debouncedSearchQuery, selectedCategory]);
+  }, [products, debouncedSearchQuery, selectedCategory, stockFilter]);
 
   const handleToggleSelectAll = () => {
     if (selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0) {
@@ -581,8 +591,8 @@ export function Inventory() {
 
       <Tabs defaultValue="products" className="w-full">
         <TabsList className="bg-[#141210] border border-[#3A3230] p-1 mb-6">
-          <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black">Products</TabsTrigger>
-          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black">Purchase Orders</TabsTrigger>
+          <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Products</TabsTrigger>
+          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Purchase Orders</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="space-y-6">
@@ -863,12 +873,21 @@ export function Inventory() {
         <select
           value={selectedCategory}
           onChange={(e) => setSelectedCategory(e.target.value)}
-          className="bg-[#0A0C10] border border-[#3A3230] h-12 px-3 text-[#FAF7F2] font-mono text-sm min-w-[200px] outline-none rounded-md focus:ring-1 focus:ring-[#FF6F00]"
+          className="bg-[#0A0C10] border border-[#3A3230] h-12 px-3 text-[#FAF7F2] font-mono text-sm min-w-[150px] outline-none rounded-md focus:ring-1 focus:ring-[#FF6F00]"
         >
           <option value="All">ALL CATEGORIES</option>
           {categories.map((c) => (
             <option key={c} value={c}>{c.toUpperCase()}</option>
           ))}
+        </select>
+        <select
+          value={stockFilter}
+          onChange={(e) => setStockFilter(e.target.value)}
+          className="bg-[#0A0C10] border border-[#3A3230] h-12 px-3 text-[#FAF7F2] font-mono text-sm min-w-[150px] outline-none rounded-md focus:ring-1 focus:ring-[#FF6F00]"
+        >
+          <option value="All">ALL STOCK</option>
+          <option value="LowStock">LOW STOCK</option>
+          <option value="OutOfStock">OUT OF STOCK</option>
         </select>
       </div>
 

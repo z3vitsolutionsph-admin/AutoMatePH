@@ -193,7 +193,7 @@ service cloud.firestore {
         && incoming().timestamp == request.time;
         
       allow update: if false; // Immutable
-      allow delete: if false; // Immutable
+      allow delete: if isStoreManager(); // Allow store managers and admins to clear logs
     }
 
     match /purchaseOrders/{orderId} {
