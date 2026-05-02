@@ -19,10 +19,10 @@ export function Layout() {
 
   const navItems = [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
-    { label: 'Terminal (POS)', path: '/pos', icon: ShoppingCart, roles: ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER'] },
+    { label: 'Point of Sale', path: '/pos', icon: ShoppingCart, roles: ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER'] },
     { label: 'Inventory', path: '/inventory', icon: Package, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Activity', path: '/activityLog', icon: Activity, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
-    { label: 'Account Mgmt', path: '/users', icon: Users, roles: ['SUPER_ADMIN'] },
+    { label: 'Users & Roles', path: '/users', icon: Users, roles: ['SUPER_ADMIN'] },
   ];
 
   return (
@@ -91,7 +91,7 @@ export function Layout() {
                 <div className="p-2 border border-[#1D9E75] rounded-lg bg-[#1A1614] flex items-center justify-center">
                    <Terminal className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
-                <span className="text-[9px] uppercase font-bold tracking-tighter text-center hidden sm:block">AI Foresight</span>
+                <span className="text-[9px] uppercase font-bold tracking-tighter text-center hidden sm:block">AI Insights</span>
              </div>
 
              <div 

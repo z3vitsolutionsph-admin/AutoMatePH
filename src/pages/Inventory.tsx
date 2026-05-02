@@ -705,7 +705,7 @@ export function Inventory() {
         <TabsList className="bg-[#141210] border border-[#3A3230] p-1 mb-6">
           <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Products</TabsTrigger>
           <TabsTrigger value="suppliers" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Suppliers</TabsTrigger>
-          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Purchase Orders</TabsTrigger>
+          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Supplier Orders</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="space-y-6">
@@ -973,7 +973,7 @@ export function Inventory() {
             <div className="flex items-start gap-3 px-4 py-3 bg-red-500/10 border border-red-500/20 text-red-500 rounded-sm text-xs font-mono">
                <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse mt-1 shrink-0"></span>
                <div>
-                 <span className="font-bold tracking-wider">{outOfStockProducts.length} CRITICAL ERRORS</span>
+                 <span className="font-bold tracking-wider">{outOfStockProducts.length} CRITICAL OUT OF STOCK</span>
                  <p className="mt-1 opacity-80 leading-relaxed">Items totally depleted. Restock immediately.</p>
                </div>
             </div>
@@ -982,7 +982,7 @@ export function Inventory() {
             <div className="flex items-start gap-3 px-4 py-3 bg-[#FF6F00]/10 border border-[#FF6F00]/20 text-[#FF6F00] rounded-sm text-xs font-mono">
                <span className="w-2 h-2 rounded-full bg-[#FF6F00] animate-pulse mt-1 shrink-0"></span>
                <div>
-                 <span className="font-bold tracking-wider">{lowStockProducts.length} WARNINGS</span>
+                 <span className="font-bold tracking-wider">{lowStockProducts.length} LOW STOCK WARNINGS</span>
                  <p className="mt-1 opacity-80 leading-relaxed">Items below minimum stock threshold.</p>
                </div>
             </div>

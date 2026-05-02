@@ -15,7 +15,7 @@ interface Message {
 
 export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
   const [messages, setMessages] = useState<Message[]>([
-    { role: 'model', text: 'AutoMatePH AI Foresight active. Type a command or ask a question.' }
+    { role: 'model', text: 'AutoMatePH AI Assistant active. Type a command or ask a question.' }
   ]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -123,7 +123,7 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
         const daysLeft = velocity > 0 ? (p.stock / velocity) : Infinity;
         if (velocity > 0 && p.stock > 0 && daysLeft < 30) {
           const reorderQty = Math.ceil(velocity * 14 + (p.minStock || 0));
-          forecastsStr.push(`- ${p.name}: Velocity ${velocity.toFixed(1)}/day, Stockout in ${daysLeft.toFixed(1)} days. Reorder Rec: ${reorderQty}`);
+          forecastsStr.push(`- ${p.name}: Sales Rate ${velocity.toFixed(1)}/day, Stockout in ${daysLeft.toFixed(1)} days. Suggest Ordering: ${reorderQty}`);
         }
       });
 
@@ -201,7 +201,7 @@ AI:`;
 
       setMessages(prev => [...prev, { role: 'model', text: response.text || 'No response.' }]);
     } catch (err: any) {
-      console.error("AI Foresight Error:", err);
+      console.error("AI Insights Error:", err);
       const errMsg = err.message || 'FAILED TO CONNECT TO CORE INTELLIGENCE';
       setMessages(prev => [...prev, { role: 'error', text: `[SYSTEM DIAGNOSTIC] ${errMsg}` }]);
     } finally {
@@ -231,7 +231,7 @@ AI:`;
              <div className="h-12 bg-gradient-to-r from-[#FF6F00] to-[#E65100] text-black flex items-center justify-between px-4 shrink-0 shadow-sm">
                <div className="flex items-center gap-2 font-bold text-sm tracking-widest uppercase">
                  <Terminal className="h-5 w-5" />
-                 Foresight_Terminal
+                 AI_Assistant
                </div>
                <div className="flex items-center gap-1">
                  <button onClick={toggleExpand} className="hover:bg-black/20 p-1.5 rounded transition-colors hidden sm:block" title={isExpanded ? "Restore" : "Maximize"}>

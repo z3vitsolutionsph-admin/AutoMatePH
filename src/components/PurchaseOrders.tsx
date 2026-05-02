@@ -110,6 +110,16 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
   }, [prefilledPOItem, products, suppliers, onClearPrefill]);
 
   useEffect(() => {
+    if (isDialogOpen) {
+      if (!expectedDeliveryDate) {
+        const deliveryDate = new Date();
+        deliveryDate.setDate(deliveryDate.getDate() + 7);
+        setExpectedDeliveryDate(deliveryDate.toISOString().split('T')[0]);
+      }
+    }
+  }, [isDialogOpen, expectedDeliveryDate]);
+
+  useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsProductDropdownOpen(false);
@@ -223,7 +233,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
 
       await addDoc(collection(db, 'purchaseOrders'), poData);
       
-      toast.success('Purchase Order created');
+      toast.success('Supplier Order created');
       setIsDialogOpen(false);
       resetForm();
     } catch (error) {
@@ -235,6 +245,25 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
 
   const handleMarkDelivered = async (order: PurchaseOrder) => {
     if (!canEdit) return;
+    
+    // Status validation
+    if (order.status !== 'PENDING') {
+      toast.error(`Order cannot be marked as delivered because it is already ${order.status.toLowerCase()}`);
+      return;
+    }
+
+    // Validate that all products still exist in the inventory
+    const invalidItems = order.items.filter(item => !products.some(p => p.id === item.productId));
+    if (invalidItems.length > 0) {
+      toast.error(`Cannot deliver: some products no longer exist in inventory (${invalidItems.map(i => i.productName).join(', ')})`);
+      return;
+    }
+
+    // User confirmation
+    if (!window.confirm('Are you sure you want to mark this order as delivered? This will automatically add the ordered quantities to your inventory stock.')) {
+      return;
+    }
+
     try {
       setIsSubmitting(true);
       
@@ -261,7 +290,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       batch.set(logRef, {
         type: 'INBOUND_DELIVERY',
         userId: user?.email || user?.uid || 'Unknown',
-        details: `Received delivery for PO from ${order.supplierName} (${order.items.length} items)`,
+        details: `Received delivery for order from ${order.supplierName} (${order.items.length} items)`,
         timestamp: serverTimestamp()
       });
 
@@ -276,7 +305,16 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
 
   const handleCancelOrder = async (order: PurchaseOrder) => {
     if (!canEdit) return;
-    if (!window.confirm('Are you sure you want to cancel this order?')) return;
+    
+    // Status validation
+    if (order.status !== 'PENDING') {
+      toast.error(`Order cannot be cancelled because it is already ${order.status.toLowerCase()}`);
+      return;
+    }
+
+    if (!window.confirm('Are you sure you want to cancel this order? This action cannot be undone and no items will be added to inventory.')) {
+      return;
+    }
     
     try {
       setIsSubmitting(true);
@@ -291,9 +329,9 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       // Add activity log
       const logRef = doc(collection(db, 'activityLogs'));
       batch.set(logRef, {
-        type: 'PO_CANCELLED',
+        type: 'ORDER_CANCELLED',
         userId: user?.email || user?.uid || 'Unknown',
-        details: `Cancelled PO for ${order.supplierName} (${order.items.length} items)`,
+        details: `Cancelled order for ${order.supplierName} (${order.items.length} items)`,
         timestamp: serverTimestamp()
       });
       
@@ -313,12 +351,12 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       // Title
       doc.setFontSize(22);
       doc.setTextColor(255, 111, 0); // Primary color matching
-      doc.text('PURCHASE ORDER', 105, 20, { align: 'center' });
+      doc.text('SUPPLIER ORDER', 105, 20, { align: 'center' });
       
       // Order Details
       doc.setFontSize(10);
       doc.setTextColor(100, 100, 100);
-      doc.text(`PO Number: ${order.id}`, 20, 35);
+      doc.text(`Order Number: ${order.id}`, 20, 35);
       doc.text(`Date: ${order.orderDate}`, 20, 42);
       doc.text(`Status: ${order.status}`, 20, 49);
       if (order.expectedDeliveryDate) {
@@ -395,7 +433,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
        <div className="flex flex-col items-center justify-center p-12 text-[#7A736E] border border-[#3A3230] rounded-lg bg-[#141210]">
          <Truck className="w-12 h-12 mb-4 opacity-50" />
          <h2 className="text-lg font-bold text-[#FAF7F2]">Access Restricted</h2>
-         <p className="font-mono text-sm mt-2">Only Store Managers can manage purchase orders.</p>
+         <p className="font-mono text-sm mt-2">Only Store Managers can manage supplier orders.</p>
        </div>
     );
   }
@@ -415,7 +453,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
            />
          </div>
          <Button onClick={() => setIsDialogOpen(true)} className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold uppercase tracking-widest text-xs h-10">
-           <Plus className="mr-2 h-4 w-4" /> New PO
+           <Plus className="mr-2 h-4 w-4" /> New Order
          </Button>
          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
            <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -431,17 +469,42 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
                    <select 
                      required
                      value={supplierId} 
-                     onChange={e => {
-                       const selected = suppliers.find(s => s.id === e.target.value);
-                       setSupplierId(e.target.value);
-                       if (selected) {
-                         setSupplierName(selected.name);
-                         setSupplierContact(selected.contact || '');
-                       } else {
-                         setSupplierName('');
-                         setSupplierContact('');
-                       }
-                     }}
+                    onChange={e => {
+                      const newSupplierId = e.target.value;
+                      const selected = suppliers.find(s => s.id === newSupplierId);
+                      setSupplierId(newSupplierId);
+                      if (selected) {
+                        setSupplierName(selected.name);
+                        setSupplierContact(selected.contact || '');
+                        
+                        // Auto-suggest low stock products for this supplier
+                        const lowStockProducts = products.filter(p => p.supplierId === newSupplierId && p.stock <= (p.minStock || 0));
+                        if (lowStockProducts.length > 0) {
+                          const suggestedItems: POItem[] = lowStockProducts.map(p => ({
+                            productId: p.id,
+                            productName: p.name,
+                            quantity: (p.minStock && p.minStock > 0) ? p.minStock * 2 : 10,
+                            cost: p.cost || 0
+                          }));
+                          
+                          // Merge with existing items to prevent duplicates if user already added items
+                          setPoItems(current => {
+                            const newItems = [...current];
+                            suggestedItems.forEach(suggested => {
+                              if (!newItems.some(existing => existing.productId === suggested.productId)) {
+                                newItems.push(suggested);
+                              }
+                            });
+                            return newItems;
+                          });
+                          
+                          toast.info(`Automatically added ${suggestedItems.length} low-stock products from this supplier`);
+                        }
+                      } else {
+                        setSupplierName('');
+                        setSupplierContact('');
+                      }
+                    }}
                      className="flex h-10 w-full rounded-md border border-[#3A3230] bg-[#141210] px-3 py-2 text-sm text-[#FAF7F2] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF6F00]"
                    >
                      <option value="" disabled>Select a supplier...</option>
@@ -665,7 +728,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
         <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-2xl max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-[#FF6F00] uppercase tracking-widest text-sm border-b border-[#3A3230] pb-4 flex justify-between items-center">
-              <span>Purchase Order Details</span>
+              <span>Supplier Order Details</span>
             </DialogTitle>
           </DialogHeader>
 

@@ -191,7 +191,7 @@ export function Dashboard() {
       setIsLoadingSales(false);
       setSalesError(null);
     }, (e) => {
-      setSalesError("Unable to load telemetry data.");
+      setSalesError("Unable to load performance data.");
       setIsLoadingSales(false);
       handleFirestoreError(e, OperationType.GET, 'transactions');
     });
@@ -207,7 +207,7 @@ export function Dashboard() {
       <div className="flex justify-between items-center">
         <div>
            <h2 className="text-2xl font-bold tracking-tight text-[#FAF7F2]">Terminal Overview</h2>
-           <p className="text-sm font-mono text-[#7A736E]">Real-time telemetry and operational metrics</p>
+           <p className="text-sm font-mono text-[#7A736E]">Real-time operational metrics and tracking</p>
         </div>
       </div>
 
@@ -284,12 +284,12 @@ export function Dashboard() {
         {/* Main Chart */}
         <Card className="bg-[#141210] border-[#3A3230] lg:col-span-2 flex flex-col min-h-[350px]">
           <CardHeader>
-            <CardTitle className="text-sm font-mono text-[#7A736E]">REVENUE TELEMETRY (HOURLY)</CardTitle>
+            <CardTitle className="text-sm font-mono text-[#7A736E]">REVENUE MONITORING (HOURLY)</CardTitle>
           </CardHeader>
           <CardContent className="h-[300px] w-full">
              {isLoadingSales ? (
                <div className="h-full w-full flex items-center justify-center font-mono text-[#7A736E] animate-pulse">
-                 SYNCING TELEMETRY...
+                 SYNCING DATA...
                </div>
              ) : salesError ? (
                <div className="h-full w-full flex items-center justify-center font-mono text-red-500">
@@ -330,7 +330,7 @@ export function Dashboard() {
           </div>
           <CardHeader>
             <CardTitle className="text-sm font-mono text-[#1D9E75] flex items-center gap-2 uppercase tracking-wide">
-              <span>●</span> AI FORESIGHT (GEMINI)
+              <span>●</span> AI ASSISTANT (GEMINI)
             </CardTitle>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col">
@@ -338,19 +338,19 @@ export function Dashboard() {
                {forecastData && forecastData.length > 0 ? (
                  <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
                    <div className="text-xs text-[#7A736E] font-mono mb-2 flex items-center justify-between">
-                     <span>FORECAST: STOCKOUT WARNING</span>
+                     <span>FORECAST: LOW STOCK WARNING</span>
                      <span className="text-[#FF6F00]">{forecastData.length} items on watch</span>
                    </div>
                    <div className="text-sm text-[#FAF7F2] leading-relaxed">
-                     Based on trailing velocity, <span className="font-bold text-[#FF6F00]">{forecastData[0].name}</span> will exhaust in <span className="font-bold">{forecastData[0].daysLeft.toFixed(1)} days</span>. 
-                     Recommend reordering <span className="font-bold text-[#1D9E75]">{forecastData[0].reorderQty} units</span> to cover lead time.
+                     Based on recent sales rate, <span className="font-bold text-[#FF6F00]">{forecastData[0].name}</span> will run out in <span className="font-bold">{forecastData[0].daysLeft.toFixed(1)} days</span>. 
+                     Recommend ordering <span className="font-bold text-[#1D9E75]">{forecastData[0].reorderQty} units</span> to cover lead time.
                    </div>
                  </div>
                ) : (
                  <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
                    <div className="text-xs text-[#7A736E] font-mono mb-2">FORECAST: ALL STABLE</div>
                    <div className="text-sm text-[#FAF7F2] leading-relaxed">
-                     No critical stockout warnings detected based on recent velocity.
+                     No critical stock depletion warnings detected based on recent sales.
                    </div>
                  </div>
                )}
@@ -375,7 +375,7 @@ export function Dashboard() {
           <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px]">
             <CardHeader className="border-b border-[#3A3230]/50 pb-4">
               <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-wide">
-                Stockout Predictions & Reorder Intelligence
+                Stockout Predictions & Order Suggestions
               </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 p-0">
@@ -386,10 +386,10 @@ export function Dashboard() {
                       <tr>
                         <th className="px-6 py-4 font-medium">Product Name</th>
                         <th className="px-6 py-4 font-medium text-right">Current Stock</th>
-                        <th className="px-6 py-4 font-medium text-right">Velocity/Day</th>
+                        <th className="px-6 py-4 font-medium text-right">Sales/Day</th>
                         <th className="px-6 py-4 font-medium text-right">Days Left</th>
-                        <th className="px-6 py-4 font-medium text-right">Est. Stockout</th>
-                        <th className="px-6 py-4 font-medium text-right text-[#1D9E75]">Rec. Reorder</th>
+                        <th className="px-6 py-4 font-medium text-right">Est. Depletion</th>
+                        <th className="px-6 py-4 font-medium text-right text-[#1D9E75]">Suggested Order</th>
                         <th className="px-6 py-4 font-medium text-right">Actions</th>
                       </tr>
                     </thead>
@@ -418,7 +418,7 @@ export function Dashboard() {
                                  className="px-3 py-1 bg-[#FF6F00]/10 hover:bg-[#FF6F00]/20 text-[#FF6F00] text-[10px] uppercase font-mono tracking-widest rounded border border-[#FF6F00]/30 transition-colors"
                                  onClick={() => navigate('/inventory', { state: { createPO: true, productId: item.id, qty: item.reorderQty } })}
                                >
-                                 Create PO
+                                 Create Order
                                </button>
                             </td>
                           </tr>
@@ -431,7 +431,7 @@ export function Dashboard() {
                 <div className="h-full w-full min-h-[250px] flex flex-col items-center justify-center text-[#7A736E] font-mono py-10">
                    <PackageSearch className="w-12 h-12 mb-3 opacity-20" />
                    <span>INVENTORY LEVELS STABLE</span>
-                   <span className="text-xs mt-1 opacity-70">No critical stockouts predicted in the near term.</span>
+                   <span className="text-xs mt-1 opacity-70">No critical stock depletion predicted in the near term.</span>
                 </div>
               )}
             </CardContent>

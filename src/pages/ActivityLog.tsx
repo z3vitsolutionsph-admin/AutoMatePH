@@ -75,7 +75,7 @@ export function ActivityLog() {
       }
 
       await Promise.all(batches);
-      toast.success("System audit trail has been successfully cleared.", {
+      toast.success("Activity history has been successfully cleared.", {
         icon: '🗑️'
       });
       setIsConfirmOpen(false);
@@ -95,7 +95,7 @@ export function ActivityLog() {
       <div className="flex flex-col sm:flex-row justify-between gap-4 items-start sm:items-end">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-[#FAF7F2] flex items-center gap-2">
-            <Activity className="h-6 w-6 text-[#1D9E75]" /> System Audit Trail
+            <Activity className="h-6 w-6 text-[#1D9E75]" /> Activity History
           </h2>
           <p className="text-sm font-mono text-[#7A736E]">Chronological immutable activity log</p>
         </div>
@@ -117,7 +117,7 @@ export function ActivityLog() {
             <AlertDialogHeader>
               <AlertDialogTitle className="flex items-center gap-2 text-red-500">
                 <AlertTriangle className="h-5 w-5" />
-                Clear System Audit Trail
+                Clear Activity History
               </AlertDialogTitle>
               <AlertDialogDescription className="text-[#7A736E]">
                 Are you absolutely sure you want to delete all activity logs? This action is permanent and cannot be undone. All historical tracking data will be lost.
@@ -160,7 +160,7 @@ export function ActivityLog() {
               <TableRow className="border-[#3A3230] hover:bg-transparent">
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[180px]">TIMESTAMP</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">TYPE</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">OPERATOR ID</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">USER</TableHead>
                 <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[200px]">DETAILS</TableHead>
               </TableRow>
             </TableHeader>
@@ -174,7 +174,7 @@ export function ActivityLog() {
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       <span className="text-[#7A736E]">
-                        {log.type}
+                        {log.type.replace(/_/g, ' ')}
                       </span>
                     </TableCell>
                     <TableCell className="text-[#1D9E75] truncate max-w-[150px]" title={log.userId}>
