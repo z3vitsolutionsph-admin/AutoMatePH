@@ -194,7 +194,11 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
 
   const handleCreateOrder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supplierName || !orderDate || poItems.length === 0) {
+    if (!supplierId) {
+      toast.error('Please select a supplier');
+      return;
+    }
+    if (!orderDate || poItems.length === 0) {
       toast.error('Please fill in required fields and add at least one item');
       return;
     }
