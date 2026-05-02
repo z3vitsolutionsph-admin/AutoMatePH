@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer, AlertTriangle, Download } from 'lucide-react';
+import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer, AlertTriangle, Download, Sparkles, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/library';
@@ -19,6 +19,7 @@ import { useReactToPrint } from 'react-to-print';
 import { toPng } from 'html-to-image';
 import jsPDF from 'jspdf';
 import { useDebounce } from '../hooks/useDebounce';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { PurchaseOrders } from '../components/PurchaseOrders';
 import imageCompression from 'browser-image-compression';
@@ -37,6 +38,14 @@ interface Product {
   category: string;
   description?: string;
   imageUrl?: string;
+  supplierId?: string;
+}
+
+interface Supplier {
+  id: string;
+  name: string;
+  contact: string;
+  address: string;
 }
 
 export function Inventory() {
@@ -45,6 +54,29 @@ export function Inventory() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDetailsDialogOpen, setIsDetailsDialogOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState(() => {
+    return location.state?.createPO ? 'purchase_orders' : 'products';
+  });
+  const [prefilledPOItem, setPrefilledPOItem] = useState<{productId: string, qty: number} | null>(() => {
+    if (location.state?.createPO && location.state?.productId && location.state?.qty) {
+      return { productId: location.state.productId, qty: location.state.qty };
+    }
+    return null;
+  });
+
+  // Clear location state after reading
+  useEffect(() => {
+    if (location.state?.createPO) {
+      navigate('/inventory', { replace: true, state: {} });
+    }
+  }, [location.state, navigate]);
+
+  const handleReorderProduct = (product: Product, qty: number) => {
+    setPrefilledPOItem({ productId: product.id, qty });
+    setActiveTab('purchase_orders');
+  };
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
@@ -104,10 +136,18 @@ export function Inventory() {
   const [minStock, setMinStock] = useState('0');
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
+  const [supplierId, setSupplierId] = useState('');
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imageUrl, setImageUrl] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
+
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [isSupplierDialogOpen, setIsSupplierDialogOpen] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
+  const [supplierName, setSupplierName] = useState('');
+  const [supplierContact, setSupplierContact] = useState('');
+  const [supplierAddress, setSupplierAddress] = useState('');
 
   // Cropper states
   const [crop, setCrop] = useState<Crop>({
@@ -138,14 +178,21 @@ export function Inventory() {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = onSnapshot(collection(db, 'products'), (snapshot) => {
+    const unsubscribeProducts = onSnapshot(collection(db, 'products'), (snapshot) => {
       const prods: Product[] = [];
       snapshot.forEach((doc) => prods.push({ id: doc.id, ...doc.data() } as Product));
       setProducts(prods);
     }, (error) => handleFirestoreError(error, OperationType.GET, 'products'));
 
+    const unsubscribeSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
+      const supps: Supplier[] = [];
+      snapshot.forEach((doc) => supps.push({ id: doc.id, ...doc.data() } as Supplier));
+      setSuppliers(supps);
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'suppliers'));
+
     return () => {
-      unsubscribe();
+      unsubscribeProducts();
+      unsubscribeSuppliers();
       if (codeReader.current) codeReader.current.reset();
     };
   }, []);
@@ -161,6 +208,7 @@ export function Inventory() {
       setMinStock(product.minStock.toString());
       setCategory(product.category);
       setDescription(product.description || '');
+      setSupplierId(product.supplierId || '');
       setImageUrl(product.imageUrl || '');
       setImageFile(null);
     } else {
@@ -173,6 +221,7 @@ export function Inventory() {
       setMinStock('0');
       setCategory('');
       setDescription('');
+      setSupplierId('');
       setImageUrl('');
       setImageFile(null);
     }
@@ -183,6 +232,68 @@ export function Inventory() {
   const closeDialog = () => {
     setIsDialogOpen(false);
     stopScanner();
+  };
+
+  const openSupplierDialog = (supplier?: Supplier) => {
+    if (supplier) {
+      setEditingSupplier(supplier);
+      setSupplierName(supplier.name);
+      setSupplierContact(supplier.contact);
+      setSupplierAddress(supplier.address);
+    } else {
+      setEditingSupplier(null);
+      setSupplierName('');
+      setSupplierContact('');
+      setSupplierAddress('');
+    }
+    setIsSupplierDialogOpen(true);
+  };
+
+  const closeSupplierDialog = () => {
+    setIsSupplierDialogOpen(false);
+    setEditingSupplier(null);
+  };
+
+  const handleSaveSupplier = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      const supplierData = {
+        name: supplierName,
+        contact: supplierContact,
+        address: supplierAddress,
+      };
+
+      if (editingSupplier) {
+        await updateDoc(doc(db, 'suppliers', editingSupplier.id), {
+          ...supplierData,
+          updatedAt: serverTimestamp()
+        });
+        toast.success('Supplier updated');
+      } else {
+        await addDoc(collection(db, 'suppliers'), {
+          ...supplierData,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+        toast.success('Supplier created');
+      }
+      closeSupplierDialog();
+    } catch (error) {
+      handleFirestoreError(error, editingSupplier ? OperationType.UPDATE : OperationType.CREATE, 'suppliers');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteSupplier = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this supplier?')) return;
+    try {
+      await deleteDoc(doc(db, 'suppliers', id));
+      toast.success('Supplier deleted');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'suppliers');
+    }
   };
 
   const generateBarcode = () => {
@@ -397,6 +508,7 @@ export function Inventory() {
       minStock: parseInt(minStock, 10) || 0,
       category,
       description,
+      supplierId: supplierId || '',
       imageUrl: imageUrl,
     };
 
@@ -589,9 +701,10 @@ export function Inventory() {
         </div>
       </div>
 
-      <Tabs defaultValue="products" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-[#141210] border border-[#3A3230] p-1 mb-6">
           <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Products</TabsTrigger>
+          <TabsTrigger value="suppliers" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Suppliers</TabsTrigger>
           <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Purchase Orders</TabsTrigger>
         </TabsList>
 
@@ -689,55 +802,57 @@ export function Inventory() {
                     className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
                   />
                 </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-mono text-[#7A736E] uppercase">Price (₱)</label>
-                  <Input 
-                    name="price" 
-                    type="number" 
-                    step="0.01" 
-                    min="0" 
-                    value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    required 
-                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-mono text-[#7A736E] uppercase">Cost (₱)</label>
-                  <Input 
-                    name="cost" 
-                    type="number" 
-                    step="0.01" 
-                    min="0" 
-                    value={cost}
-                    onChange={(e) => setCost(e.target.value)}
-                    required 
-                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-mono text-[#7A736E] uppercase">Initial Stock</label>
-                  <Input 
-                    name="stock" 
-                    type="number" 
-                    min="0" 
-                    value={stock}
-                    onChange={(e) => setStock(e.target.value)}
-                    required 
-                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-mono text-[#7A736E] uppercase">Min Stock (Alert)</label>
-                  <Input 
-                    name="minStock" 
-                    type="number" 
-                    min="0" 
-                    value={minStock}
-                    onChange={(e) => setMinStock(e.target.value)}
-                    required 
-                    className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
-                  />
+                <div className="col-span-2 grid grid-cols-2 gap-4 bg-[#1A1614]/50 border border-[#3A3230] p-4 rounded-lg">
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono text-[#7A736E] uppercase">Price (₱)</label>
+                    <Input 
+                      name="price" 
+                      type="number" 
+                      step="0.01" 
+                      min="0" 
+                      value={price}
+                      onChange={(e) => setPrice(e.target.value)}
+                      required 
+                      className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono text-[#7A736E] uppercase">Cost (₱)</label>
+                    <Input 
+                      name="cost" 
+                      type="number" 
+                      step="0.01" 
+                      min="0" 
+                      value={cost}
+                      onChange={(e) => setCost(e.target.value)}
+                      required 
+                      className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono text-[#7A736E] uppercase">Initial Stock</label>
+                    <Input 
+                      name="stock" 
+                      type="number" 
+                      min="0" 
+                      value={stock}
+                      onChange={(e) => setStock(e.target.value)}
+                      required 
+                      className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono text-[#7A736E] uppercase">Min Stock (Alert)</label>
+                    <Input 
+                      name="minStock" 
+                      type="number" 
+                      min="0" 
+                      value={minStock}
+                      onChange={(e) => setMinStock(e.target.value)}
+                      required 
+                      className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                    />
+                  </div>
                 </div>
                 <div className="col-span-2 space-y-2">
                   <label className="text-xs font-mono text-[#7A736E] uppercase">Category</label>
@@ -748,6 +863,19 @@ export function Inventory() {
                     required 
                     className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
                   />
+                </div>
+                <div className="col-span-2 space-y-2">
+                  <label className="text-xs font-mono text-[#7A736E] uppercase">Supplier <span className="text-[10px] text-gray-500">(Optional)</span></label>
+                  <select
+                    value={supplierId}
+                    onChange={(e) => setSupplierId(e.target.value)}
+                    className="w-full bg-[#0A0C10] border border-[#3A3230] h-10 px-3 text-[#FAF7F2] font-mono text-sm outline-none rounded-md focus:ring-1 focus:ring-[#FF6F00]"
+                  >
+                    <option value="">No Supplier</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
                 </div>
                 <div className="col-span-2 space-y-2">
                   <label className="text-xs font-mono text-[#7A736E] uppercase">Description</label>
@@ -765,9 +893,13 @@ export function Inventory() {
                       variant="ghost" 
                       size="icon" 
                       title="Generate AI Description"
-                      className="absolute right-0 top-0 h-10 w-10 text-[#FF6F00] hover:bg-[#FF6F00]/10"
+                      className={`absolute right-0 top-0 h-10 w-10 transition-colors ${isGeneratingDesc ? 'text-[#1D9E75]' : 'text-[#FF6F00] hover:bg-[#FF6F00]/10'}`}
                     >
-                      <Wand2 className={`h-4 w-4 ${isGeneratingDesc ? 'animate-spin' : ''}`} />
+                      {isGeneratingDesc ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-4 w-4 z-[1]" />
+                      )}
                     </Button>
                   </div>
                 </div>
@@ -958,6 +1090,19 @@ export function Inventory() {
                         <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="Out of Stock"></span>
                       )}
                       <span className="text-[#FAF7F2]">{product.stock}</span>
+                      {product.stock <= product.minStock && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-[10px] text-[#FF6F00] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10 border border-[#FF6F00]/30 ml-2 uppercase tracking-widest font-mono"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleReorderProduct(product, product.minStock * 2 || 10);
+                          }}
+                        >
+                          Reorder
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -1235,8 +1380,123 @@ export function Inventory() {
         </div>
       </div>
         </TabsContent>
+        <TabsContent value="suppliers" className="space-y-6">
+          <div className="flex justify-between items-center flex-wrap gap-4">
+             <div className="flex items-center gap-2 flex-wrap ml-auto">
+               {canEdit && (
+                 <Dialog open={isSupplierDialogOpen} onOpenChange={isOpen => {
+                   if (!isOpen) closeSupplierDialog();
+                   else openSupplierDialog();
+                 }}>
+                   <DialogTrigger render={<Button className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold" />}>
+                     <Plus className="mr-2 h-4 w-4" /> Add Supplier
+                   </DialogTrigger>
+                   <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[425px]">
+                     <DialogHeader>
+                       <DialogTitle>{editingSupplier ? 'Edit Supplier' : 'New Supplier'}</DialogTitle>
+                     </DialogHeader>
+                     
+                     <form onSubmit={handleSaveSupplier} className="space-y-4 py-4">
+                       <div className="space-y-2">
+                         <label className="text-xs font-mono text-[#7A736E] uppercase">Supplier Name</label>
+                         <Input 
+                           value={supplierName}
+                           onChange={(e) => setSupplierName(e.target.value)}
+                           required 
+                           className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                         />
+                       </div>
+                       <div className="space-y-2">
+                         <label className="text-xs font-mono text-[#7A736E] uppercase">Contact Details</label>
+                         <Input 
+                           value={supplierContact}
+                           onChange={(e) => setSupplierContact(e.target.value)}
+                           className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                         />
+                       </div>
+                       <div className="space-y-2">
+                         <label className="text-xs font-mono text-[#7A736E] uppercase">Address</label>
+                         <Input 
+                           value={supplierAddress}
+                           onChange={(e) => setSupplierAddress(e.target.value)}
+                           className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00]" 
+                         />
+                       </div>
+                       <div className="flex justify-end gap-2 pt-4">
+                         <Button type="button" variant="outline" onClick={closeSupplierDialog} className="border-[#3A3230] text-[#FAF7F2]">Cancel</Button>
+                         <Button type="submit" disabled={isSubmitting} className="bg-[#FF6F00] text-black hover:bg-[#FF6F00]/80">
+                           {isSubmitting ? 'Saving...' : 'Save'}
+                         </Button>
+                       </div>
+                     </form>
+                   </DialogContent>
+                 </Dialog>
+               )}
+             </div>
+          </div>
+
+          <div className="border border-[#3A3230] bg-[#0A0C10] flex-1 overflow-hidden flex flex-col">
+            <div className="overflow-x-auto flex-1">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-[#3A3230] hover:bg-transparent">
+                    <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">SUPPLIER NAME</TableHead>
+                    <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">CONTACT</TableHead>
+                    <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">ADDRESS</TableHead>
+                    <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider text-right">ACTIONS</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody className="font-mono text-sm">
+                  {suppliers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center h-24 text-[#7A736E]">No suppliers found.</TableCell>
+                    </TableRow>
+                  ) : (
+                    suppliers.map((supplier) => (
+                      <TableRow key={supplier.id} className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors">
+                        <TableCell className="text-[#FAF7F2] font-sans font-medium">{supplier.name}</TableCell>
+                        <TableCell className="text-[#7A736E]">{supplier.contact || '-'}</TableCell>
+                        <TableCell className="text-[#7A736E] max-w-[200px] truncate" title={supplier.address}>{supplier.address || '-'}</TableCell>
+                        <TableCell className="text-right whitespace-nowrap">
+                          {canEdit && (
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => openSupplierDialog(supplier)}
+                                className="h-8 w-8 text-[#FAF7F2] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10"
+                                title="Edit Supplier"
+                              >
+                                <Edit2 className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleDeleteSupplier(supplier.id)}
+                                className="h-8 w-8 text-[#FAF7F2] hover:text-red-500 hover:bg-red-500/10"
+                                title="Delete Supplier"
+                                disabled={products.some(p => p.supplierId === supplier.id)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        </TabsContent>
         <TabsContent value="purchase_orders">
-          <PurchaseOrders products={products} />
+          <PurchaseOrders 
+            products={products} 
+            suppliers={suppliers}
+            prefilledPOItem={prefilledPOItem} 
+            onClearPrefill={() => setPrefilledPOItem(null)} 
+          />
         </TabsContent>
       </Tabs>
       <Dialog open={isCropDialogOpen} onOpenChange={setIsCropDialogOpen}>

@@ -7,6 +7,7 @@ import { formatCurrency } from '../lib/utils';
 import { PackageSearch, TrendingUp, AlertTriangle, Activity } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 interface Stats {
   totalProducts: number;
@@ -32,6 +33,7 @@ export function Dashboard() {
   const [products, setProducts] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const { role } = useAuth();
+  const navigate = useNavigate();
 
   const forecastData = useMemo(() => {
     if (products.length === 0 || transactions.length === 0) return null;
@@ -388,6 +390,7 @@ export function Dashboard() {
                         <th className="px-6 py-4 font-medium text-right">Days Left</th>
                         <th className="px-6 py-4 font-medium text-right">Est. Stockout</th>
                         <th className="px-6 py-4 font-medium text-right text-[#1D9E75]">Rec. Reorder</th>
+                        <th className="px-6 py-4 font-medium text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -409,6 +412,14 @@ export function Dashboard() {
                             </td>
                             <td className="px-6 py-4 text-right font-bold text-[#1D9E75] bg-[#1D9E75]/5">
                               {item.reorderQty}
+                            </td>
+                            <td className="px-6 py-4 text-right">
+                               <button 
+                                 className="px-3 py-1 bg-[#FF6F00]/10 hover:bg-[#FF6F00]/20 text-[#FF6F00] text-[10px] uppercase font-mono tracking-widest rounded border border-[#FF6F00]/30 transition-colors"
+                                 onClick={() => navigate('/inventory', { state: { createPO: true, productId: item.id, qty: item.reorderQty } })}
+                               >
+                                 Create PO
+                               </button>
                             </td>
                           </tr>
                         );

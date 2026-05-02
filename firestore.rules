@@ -72,6 +72,7 @@ service cloud.firestore {
         && (data.get('category', '') is string)
         && (data.get('description', '') is string)
         && (data.get('imageUrl', '') is string)
+        && (data.get('supplierId', '') is string)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -109,6 +110,15 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
     
+    function isValidSupplier(data) {
+      return data.keys().hasAll(["name", "createdAt", "updatedAt"])
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && (data.get('contact', '') is string) && data.get('contact', '').size() <= 100
+        && (data.get('address', '') is string) && data.get('address', '').size() <= 500
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // --- COLLECTIONS ---
 
     match /users/{userId} {
@@ -147,7 +157,7 @@ service cloud.firestore {
       allow update: if (isStoreManager() && 
           incoming().diff(existing()).affectedKeys().hasOnly([
             'barcode', 'name', 'price', 'cost', 'stock', 'minStock', 
-            'category', 'description', 'imageUrl', 'updatedAt'
+            'category', 'description', 'imageUrl', 'supplierId', 'updatedAt'
           ])
         ) || (isCashierOrHigher() &&
           incoming().diff(existing()).affectedKeys().hasOnly(['stock', 'updatedAt'])
@@ -215,6 +225,25 @@ service cloud.firestore {
         && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'expectedDeliveryDate']);
         
       allow delete: if false;
+    }
+    match /suppliers/{supplierId} {
+      allow get: if isCashierOrHigher();
+      allow list: if isCashierOrHigher();
+      
+      allow create: if isStoreManager()
+        && isValidId(supplierId)
+        && isValidSupplier(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if isStoreManager()
+        && isValidId(supplierId)
+        && isValidSupplier(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'contact', 'address', 'updatedAt']);
+        
+      allow delete: if isSuperAdmin();
     }
   }
 }

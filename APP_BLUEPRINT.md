@@ -62,6 +62,14 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
 - **minStock** (number): Threshold for low stock alert.
 - **category** (string): Organizational tag.
 - **locationId** (string): Aisle/Shelf reference.
+- **supplierId** (string): ID of the linked Supplier.
+
+### Suppliers (`/suppliers/{supplierId}`)
+- **name** (string): Name of the supplier company or individual.
+- **contact** (string): Phone number or email.
+- **address** (string): Physical address.
+- **createdAt** (string): ISO string or Firebase Timestamp.
+- **updatedAt** (string): ISO string or Firebase Timestamp.
 
 ### Transactions (`/transactions/{transactionId}`)
 - **totalAmount** (number): Total money exchanged.

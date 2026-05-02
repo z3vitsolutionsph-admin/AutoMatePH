@@ -29,10 +29,24 @@
         "minStock": { "type": "number" },
         "category": { "type": "string" },
         "imageUrl": { "type": "string" },
+        "supplierId": { "type": "string" },
         "createdAt": { "type": "string" },
         "updatedAt": { "type": "string" }
       },
       "required": ["barcode", "name", "price", "cost", "stock", "createdAt", "updatedAt"]
+    },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "A supplier entity that provides products",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "contact": { "type": "string" },
+        "address": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "createdAt", "updatedAt"]
     },
     "Transaction": {
       "title": "Transaction",
@@ -100,6 +114,10 @@
     "/purchaseOrders/{orderId}": {
       "schema": { "$ref": "#/entities/PurchaseOrder" },
       "description": "Purchase orders from suppliers"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": { "$ref": "#/entities/Supplier" },
+      "description": "Suppliers of products"
     }
   }
 }
