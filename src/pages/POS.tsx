@@ -8,7 +8,7 @@ import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import { db, auth } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch, increment } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
@@ -68,11 +68,40 @@ export function POS() {
           let successCount = 0;
           for (const tx of pendingTxs) {
             try {
-              await addDoc(collection(db, 'transactions'), {
+              const batch = writeBatch(db);
+              
+              // 1. Add transaction
+              const txRef = doc(collection(db, 'transactions'));
+              batch.set(txRef, {
                 ...tx.transactionData,
                 createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp()
+                updatedAt: serverTimestamp(),
+                isOfflineSync: true
               });
+
+              // 2. Reduce stock
+              if (tx.transactionData && tx.transactionData.items) {
+                for (const item of tx.transactionData.items) {
+                  const productRef = doc(db, 'products', item.productId);
+                  batch.update(productRef, {
+                    stock: increment(-item.quantity),
+                    updatedAt: serverTimestamp()
+                  });
+                }
+              }
+
+              // 3. Activity Log
+              const logRef = doc(collection(db, 'activityLogs'));
+              batch.set(logRef, {
+                type: 'SALE',
+                userId: tx.transactionData.cashierId || 'Unknown',
+                details: `Synced offline SALE for ₱${formatCurrency(tx.transactionData.totalAmount)} (${tx.transactionData.items?.length || 0} items)`,
+                timestamp: serverTimestamp()
+              });
+
+              await batch.commit();
+
+              // 4. Mark as synced locally
               await dbLocal.transactions.update(tx.id!, { status: 'synced' });
               successCount++;
             } catch (err) {
@@ -268,8 +297,14 @@ export function POS() {
 
     if (debouncedSearchQuery) {
       const fuse = new Fuse(result, {
-        keys: ['name', 'barcode', 'category'],
-        threshold: 0.3,
+        keys: [
+          { name: 'barcode', weight: 2 },
+          { name: 'name', weight: 1 },
+          { name: 'category', weight: 0.5 }
+        ],
+        threshold: 0.4,
+        ignoreLocation: true,
+        shouldSort: true,
       });
       result = fuse.search(debouncedSearchQuery).map(res => res.item);
     }
@@ -378,26 +413,33 @@ export function POS() {
       }
     } else {
       try {
-         const docRef = await addDoc(collection(db, 'transactions'), {
+         const batch = writeBatch(db);
+         const txRef = doc(collection(db, 'transactions'));
+         
+         batch.set(txRef, {
            ...transactionData,
            createdAt: serverTimestamp(),
            updatedAt: serverTimestamp()
          });
-         newTxId = docRef.id;
+         newTxId = txRef.id;
 
          for (const item of cart) {
-           await updateDoc(doc(db, 'products', item.id), {
-             stock: item.stock - item.quantity,
+           const productRef = doc(db, 'products', item.id);
+           batch.update(productRef, {
+             stock: increment(-item.quantity),
              updatedAt: serverTimestamp()
            });
          }
 
-         await addDoc(collection(db, 'activityLogs'), {
+         const logRef = doc(collection(db, 'activityLogs'));
+         batch.set(logRef, {
            type: 'SALE',
            userId: cashierId,
            details: `Completed SALE for ₱${formatCurrency(total)} (${cart.length} items)`,
            timestamp: serverTimestamp()
          });
+         
+         await batch.commit();
          
          toast.success('Transaction Completed Successfully');
       } catch (error) {
@@ -762,139 +804,147 @@ export function POS() {
               )}
           </div>
           
-          <div className="p-6 overflow-y-auto custom-scrollbar max-h-[50vh] flex justify-center">
-            <div 
-              ref={receiptPrintRef} 
-              className="bg-white text-black p-4 font-mono text-[10px] sm:text-xs"
-              style={{ width: '80mm', maxWidth: '100%', boxSizing: 'border-box' }}
-            >
-              {/* Print-specific styles to remove browser headers/footers and margins */}
-              <style type="text/css" media="print">
-                {`
-                  @page { size: auto; margin: 0mm; }
-                  body { margin: 10mm; }
-                `}
-              </style>
+          <div className="p-6 overflow-y-auto custom-scrollbar max-h-[50vh] flex justify-center bg-[#0A0C10]">
+            <div className="relative drop-shadow-2xl my-2 hidden-print">
+              {/* Jagged top */}
+              <div className="absolute top-0 left-0 right-0 h-2 bg-[#FAF9F6]" style={{ clipPath: 'polygon(0% 100%, 5% 0%, 10% 100%, 15% 0%, 20% 100%, 25% 0%, 30% 100%, 35% 0%, 40% 100%, 45% 0%, 50% 100%, 55% 0%, 60% 100%, 65% 0%, 70% 100%, 75% 0%, 80% 100%, 85% 0%, 90% 100%, 95% 0%, 100% 100%)' }}></div>
+              <div 
+                ref={receiptPrintRef} 
+                className="bg-[#FAF9F6] text-[#1D1D1B] pt-6 pb-6 px-6 font-mono text-[10px] sm:text-xs leading-tight print:shadow-none shadow-xl"
+                style={{ width: '80mm', maxWidth: '100%', boxSizing: 'border-box' }}
+              >
+                {/* Print-specific styles to remove browser headers/footers and margins */}
+                <style type="text/css" media="print">
+                  {`
+                    @page { size: auto; margin: 0mm; }
+                    body { margin: 10mm; }
+                    .hidden-print::before, .hidden-print::after { display: none !important; }
+                  `}
+                </style>
 
-              <div className="text-center mb-4">
-                <div className="flex justify-center mb-2">
-                  {/* Simple logo placeholder */}
-                  <div className="h-10 w-10 bg-black text-white flex items-center justify-center rounded-sm font-bold text-xl">
-                    A
+                <div className="text-center mb-6">
+                  <div className="flex justify-center mb-3">
+                    <div className="h-12 w-12 bg-[#1D1D1B] text-[#FAF9F6] flex items-center justify-center rounded-sm font-bold text-2xl tracking-tighter">
+                      A
+                    </div>
                   </div>
-                </div>
-                <h1 className="font-bold text-base sm:text-lg mb-1">AUTOMATE_PH</h1>
-                <p>123 Tech Avenue, Makati City</p>
-                <p>Metro Manila, Philippines</p>
-                <p>VAT REG TIN: 123-456-789-000</p>
-                <p>MIN: 123456789</p>
-                <p className="my-2 border-b border-dashed border-gray-400"></p>
-                <p className="font-bold text-sm tracking-widest">OFFICIAL RECEIPT</p>
-                <p className="my-2 border-b border-dashed border-gray-400"></p>
-              </div>
-              
-              <div className="mb-4 space-y-1">
-                <div className="flex justify-between">
-                  <span>DATE:</span>
-                  <span>{completedTx?.createdAt?.toLocaleString() || new Date().toLocaleString()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>OR NO:</span>
-                  <span className="truncate w-32 text-right">{completedTx?.id?.substring(0, 12).toUpperCase()}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span>CASHIER:</span>
-                  <span className="truncate w-32 text-right">{completedTx?.cashierId?.substring(0, 8) || 'N/A'}</span>
-                </div>
-              </div>
-
-              <p className="my-2 border-b border-dashed border-gray-400"></p>
-              
-              {/* Table Header for Items */}
-              <div className="flex justify-between font-bold mb-2 pb-1 border-b border-gray-300">
-                <span className="flex-1">ITEM</span>
-                <span className="w-16 text-right">QTY</span>
-                <span className="w-20 text-right">AMOUNT</span>
-              </div>
-
-              <div className="my-2 space-y-2">
-                {completedTx?.items.map((item: any, i: number) => (
-                  <div key={i} className="flex flex-col">
-                     <span className="font-bold">{item.name}</span>
-                     <div className="flex justify-between text-gray-700">
-                        <span className="flex-1 pl-2">@ {formatCurrency(item.unitPrice)}</span>
-                        <span className="w-16 text-right">{item.quantity}</span>
-                        <span className="w-20 text-right">{formatCurrency(item.subtotal)}</span>
-                     </div>
-                  </div>
-                ))}
-              </div>
-
-              <p className="my-2 border-b border-dashed border-gray-400"></p>
-              
-              {/* Totals and Tax Breakdown */}
-              <div className="my-4 space-y-1">
-                <div className="flex justify-between text-gray-700">
-                  <span>SUBTOTAL</span>
-                  <span>{formatCurrency(completedTx?.totalAmount || 0)}</span>
+                  <h1 className="font-bold text-lg sm:text-xl tracking-widest mb-1">AUTOMATE_PH</h1>
+                  <p className="text-gray-600">123 Tech Avenue, Makati City</p>
+                  <p className="text-gray-600">Metro Manila, Philippines</p>
+                  <p className="text-gray-600 mt-1">VAT REG TIN: 123-456-789-000</p>
+                  <p className="text-gray-600">MIN: 123456789</p>
+                  <div className="mt-4 mb-2 border-b-2 border-dashed border-gray-400"></div>
+                  <p className="font-bold text-sm tracking-widest py-1">OFFICIAL RECEIPT</p>
+                  <div className="mb-4 border-b-2 border-dashed border-gray-400"></div>
                 </div>
                 
-                {/* Philippine Standard VAT Calculation (12% Inclusive) */}
-                {(() => {
-                  const total = completedTx?.totalAmount || 0;
-                  const vatable = total / 1.12;
-                  const vat = total - vatable;
-                  return (
-                    <>
-                      <div className="flex justify-between text-gray-700 text-[9px]">
-                        <span>VATable Sales</span>
-                        <span>{formatCurrency(vatable)}</span>
-                      </div>
-                      <div className="flex justify-between text-gray-700 text-[9px]">
-                        <span>VAT Amount (12%)</span>
-                        <span>{formatCurrency(vat)}</span>
-                      </div>
-                      <div className="flex justify-between text-gray-700 text-[9px]">
-                        <span>VAT Exempt Sales</span>
-                        <span>0.00</span>
-                      </div>
-                    </>
-                  );
-                })()}
+                <div className="mb-4 space-y-1.5 text-gray-600">
+                  <div className="flex justify-between">
+                    <span className="font-semibold">DATE:</span>
+                    <span>{completedTx?.createdAt?.toLocaleString() || new Date().toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-semibold">OR NO:</span>
+                    <span className="truncate w-32 text-right">{completedTx?.id?.substring(0, 12).toUpperCase()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="font-semibold">CASHIER:</span>
+                    <span className="truncate w-32 text-right">{completedTx?.cashierId?.substring(0, 8) || 'N/A'}</span>
+                  </div>
+                </div>
 
-                <p className="my-2 border-b border-dashed border-gray-400"></p>
+                <div className="my-2 border-b-2 border-dashed border-gray-400"></div>
+                
+                {/* Table Header for Items */}
+                <div className="flex justify-between font-bold mb-2 pb-2 border-b border-gray-800">
+                  <span className="flex-1">ITEM</span>
+                  <span className="w-10 text-right">QTY</span>
+                  <span className="w-20 text-right">AMOUNT</span>
+                </div>
 
-                <div className="flex justify-between items-center pb-1">
-                  <span className="font-bold text-sm">TOTAL DUE:</span>
-                  <span className="text-base font-bold text-black border-y-2 border-black py-1">
-                    ₱{formatCurrency(completedTx?.totalAmount || 0)}
-                  </span>
+                <div className="my-3 space-y-3">
+                  {completedTx?.items.map((item: any, i: number) => (
+                    <div key={i} className="flex flex-col">
+                       <span className="font-bold text-[#1D1D1B] uppercase">{item.name}</span>
+                       <div className="flex justify-between text-gray-600 mt-0.5">
+                          <span className="flex-1 pl-2">@ {formatCurrency(item.unitPrice)}</span>
+                          <span className="w-10 text-right font-semibold">{item.quantity}</span>
+                          <span className="w-20 text-right text-[#1D1D1B] font-bold">{formatCurrency(item.subtotal)}</span>
+                       </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="my-3 border-b-2 border-dashed border-gray-400"></div>
+                
+                {/* Totals and Tax Breakdown */}
+                <div className="my-4 space-y-1.5">
+                  <div className="flex justify-between text-gray-800 font-bold mb-2">
+                    <span>SUBTOTAL</span>
+                    <span>{formatCurrency(completedTx?.totalAmount || 0)}</span>
+                  </div>
+                  
+                  {/* Philippine Standard VAT Calculation (12% Inclusive) */}
+                  {(() => {
+                    const total = completedTx?.totalAmount || 0;
+                    const vatable = total / 1.12;
+                    const vat = total - vatable;
+                    return (
+                      <div className="pl-4 space-y-1 opacity-80">
+                        <div className="flex justify-between text-gray-700 text-[10px]">
+                          <span>VATable Sales</span>
+                          <span>{formatCurrency(vatable)}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-700 text-[10px]">
+                          <span>VAT Amount (12%)</span>
+                          <span>{formatCurrency(vat)}</span>
+                        </div>
+                        <div className="flex justify-between text-gray-700 text-[10px]">
+                          <span>VAT Exempt Sales</span>
+                          <span>0.00</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  <div className="my-3 border-b-2 border-dashed border-gray-400"></div>
+
+                  <div className="flex justify-between items-center py-2 bg-gray-200 px-2 -mx-2 rounded-sm">
+                    <span className="font-bold text-sm tracking-wide">TOTAL DUE:</span>
+                    <span className="text-lg font-black text-black">
+                      ₱{formatCurrency(completedTx?.totalAmount || 0)}
+                    </span>
+                  </div>
+                  
+                  <div className="flex justify-between mt-3 text-gray-800">
+                    <span className="font-semibold">PAID ({completedTx?.paymentMethod}):</span>
+                    <span className="font-bold">{formatCurrency(completedTx?.cashReceived || 0)}</span>
+                  </div>
+                  <div className="flex justify-between font-bold text-black text-sm mt-1">
+                    <span>CHANGE:</span>
+                    <span>{formatCurrency(completedTx?.change || 0)}</span>
+                  </div>
                 </div>
                 
-                <div className="flex justify-between mt-2 pt-1 border-t border-gray-300">
-                  <span>PAID ({completedTx?.paymentMethod}):</span>
-                  <span>{formatCurrency(completedTx?.cashReceived || 0)}</span>
-                </div>
-                <div className="flex justify-between font-bold">
-                  <span>CHANGE:</span>
-                  <span>{formatCurrency(completedTx?.change || 0)}</span>
+                <div className="my-3 border-b-2 border-dashed border-gray-400"></div>
+                
+                {/* Footer */}
+                <div className="text-center mt-6 space-y-1.5">
+                  <p className="font-bold text-xs uppercase tracking-wider">Thank you for your purchase!</p>
+                  <p className="text-[10px] uppercase text-gray-600">Please come again.</p>
+                  <p className="text-[10px] mt-3 text-gray-600">Return policy: 7 days with original receipt.</p>
+                  <div className="mt-4 border-t border-gray-400 pt-3">
+                    <p className="text-[9px] font-bold text-gray-800 mb-1">
+                      THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX
+                    </p>
+                    <p className="text-[8px] text-gray-500">
+                      Powered by AutoMatePH
+                    </p>
+                  </div>
                 </div>
               </div>
-              
-              <p className="my-2 border-b border-dashed border-gray-400"></p>
-              
-              {/* Footer */}
-              <div className="text-center mt-4 space-y-1">
-                <p className="font-bold text-xs uppercase">Thank you for your purchase!</p>
-                <p className="text-[9px] uppercase">Please come again.</p>
-                <p className="text-[9px] mt-2">Return policy: 7 days with original receipt.</p>
-                <p className="text-[9px] mt-4 font-bold border-t border-gray-400 pt-2">
-                  THIS DOCUMENT IS NOT VALID FOR CLAIM OF INPUT TAX
-                </p>
-                <p className="text-[8px] mt-1 text-gray-500">
-                  Powered by AutoMatePH
-                </p>
-              </div>
+              {/* Jagged bottom */}
+              <div className="absolute bottom-0 left-0 right-0 h-2 bg-[#FAF9F6]" style={{ clipPath: 'polygon(0% 0%, 5% 100%, 10% 0%, 15% 100%, 20% 0%, 25% 100%, 30% 0%, 35% 100%, 40% 0%, 45% 100%, 50% 0%, 55% 100%, 60% 0%, 65% 100%, 70% 0%, 75% 100%, 80% 0%, 85% 100%, 90% 0%, 95% 100%, 100% 0%)' }}></div>
             </div>
           </div>
 

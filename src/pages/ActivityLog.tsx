@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { db } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, limit, getDocs, writeBatch, doc } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { dbLocal } from '../lib/db';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Activity, Trash2, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -45,21 +46,16 @@ export function ActivityLog() {
   const handleClearAll = async () => {
     setIsClearing(true);
     try {
-      // Create a query to get all logs
-      const q = query(collection(db, 'activityLogs'));
-      const snapshot = await getDocs(q);
-      
-      if (snapshot.empty) {
-        toast.info("No activity logs to clear");
-        return;
-      }
-
       // Process in batches of 500 (Firestore limit)
       const batches = [];
       let currentBatch = writeBatch(db);
       let operationCount = 0;
 
-      snapshot.docs.forEach((document) => {
+      // 1. Clear Activity Logs
+      const qLogs = query(collection(db, 'activityLogs'));
+      const snapshotLogs = await getDocs(qLogs);
+      
+      snapshotLogs.docs.forEach((document) => {
         currentBatch.delete(doc(db, 'activityLogs', document.id));
         operationCount++;
 
@@ -70,12 +66,37 @@ export function ActivityLog() {
         }
       });
 
+      // 2. Clear Transactions
+      const qTxs = query(collection(db, 'transactions'));
+      const snapshotTxs = await getDocs(qTxs);
+
+      snapshotTxs.docs.forEach((document) => {
+        currentBatch.delete(doc(db, 'transactions', document.id));
+        operationCount++;
+
+        if (operationCount === 500) {
+          batches.push(currentBatch.commit());
+          currentBatch = writeBatch(db);
+          operationCount = 0;
+        }
+      });
+
+      // 3. Clear Local IndexedDB Transactions
+      if (dbLocal && dbLocal.transactions) {
+        await dbLocal.transactions.clear();
+      }
+
       if (operationCount > 0) {
         batches.push(currentBatch.commit());
       }
 
+      if (batches.length === 0) {
+        toast.info("No activity logs or transactions to clear");
+        return;
+      }
+
       await Promise.all(batches);
-      toast.success("Activity history has been successfully cleared.", {
+      toast.success("Activity history and transaction records have been successfully cleared.", {
         icon: '🗑️'
       });
       setIsConfirmOpen(false);
@@ -84,7 +105,7 @@ export function ActivityLog() {
       toast.error("Failed to clear activity logs. You may not have the required permissions.", {
         icon: <AlertTriangle className="h-4 w-4 text-red-500" />
       });
-      handleFirestoreError(error, OperationType.DELETE, 'activityLogs');
+      handleFirestoreError(error, OperationType.DELETE, 'activityLogs/transactions');
     } finally {
       setIsClearing(false);
     }

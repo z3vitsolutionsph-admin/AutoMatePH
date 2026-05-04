@@ -8,6 +8,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog';
 import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer, AlertTriangle, Download, Sparkles, Loader2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
@@ -141,6 +151,7 @@ export function Inventory() {
   const [imageUrl, setImageUrl] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [isSupplierDialogOpen, setIsSupplierDialogOpen] = useState(false);
@@ -286,14 +297,26 @@ export function Inventory() {
     }
   };
 
-  const handleDeleteSupplier = async (id: string) => {
-    if (!window.confirm('Are you sure you want to delete this supplier?')) return;
+  const handleDeleteSupplier = async () => {
+    if (!supplierToDelete) return;
     try {
-      await deleteDoc(doc(db, 'suppliers', id));
-      toast.success('Supplier deleted');
+      await deleteDoc(doc(db, 'suppliers', supplierToDelete.id));
+      toast.success('Supplier deleted successfully');
+      setSupplierToDelete(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.DELETE, 'suppliers');
     }
+  };
+
+  const handleSupplierDeleteClick = (supplier: Supplier) => {
+    const linkedProductsCount = products.filter(p => p.supplierId === supplier.id).length;
+    if (linkedProductsCount > 0) {
+      toast.error(`Cannot delete ${supplier.name} because it is linked to ${linkedProductsCount} product(s). Please edit or delete those products first.`, {
+        icon: <AlertTriangle className="h-4 w-4 text-red-500" />
+      });
+      return;
+    }
+    setSupplierToDelete(supplier);
   };
 
   const generateBarcode = () => {
@@ -439,6 +462,75 @@ export function Inventory() {
     }
   };
 
+  const generateProductImage = async () => {
+    if (!name) {
+      toast.error('Please enter a product name first before generating an image.');
+      return;
+    }
+    
+    try {
+      setIsGeneratingImage(true);
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+      let supplierNameText = '';
+      if (supplierId) {
+        const supplier = suppliers.find(s => s.id === supplierId);
+        if (supplier) {
+          supplierNameText = supplier.name;
+        }
+      }
+      const prompt = `Photorealistic, accurate studio product photography of the real-world product: ${name} ${category ? `(${category})` : ''} ${supplierNameText ? `by ${supplierNameText}` : ''}. Exact brand packaging and appearance. Centered, extreme detail, 4k, clean white background, professional lighting.`;
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [
+            {
+              text: prompt,
+            },
+          ],
+        },
+        config: {
+          imageConfig: {
+            aspectRatio: "1:1"
+          }
+        },
+      });
+      
+      let generatedImageUrl = '';
+      if (response.candidates && response.candidates[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData && part.inlineData.mimeType && part.inlineData.data) {
+            generatedImageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            break;
+          }
+        }
+      }
+      
+      if (generatedImageUrl) {
+        try {
+          const res = await fetch(generatedImageUrl);
+          const blob = await res.blob();
+          const file = new File([blob], "generated_product.jpg", { type: blob.type || "image/jpeg" });
+          setImageFile(file);
+          setImageUrl('');
+          toast.success("Image generated successfully");
+        } catch (e) {
+          console.error("Error converting generated image to file:", e);
+          setImageUrl(generatedImageUrl);
+          setImageFile(null);
+          toast.success("Image generated successfully, but not converted to file.");
+        }
+      } else {
+        toast.error('Failed to generate image. Try again.');
+      }
+    } catch (err) {
+      toast.error('Failed to generate image. Ensure API key supports image generation.');
+      console.error('Gemini error:', err);
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
   const getCroppedImg = async () => {
     if (!imageRef.current || !crop.width || !crop.height) return;
     
@@ -581,6 +673,8 @@ export function Inventory() {
 
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [productToDelete, setProductToDelete] = useState<Product | null>(null);
+
+  const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
 
   const handleDelete = async () => {
     if (!productToDelete) return;
@@ -938,11 +1032,23 @@ export function Inventory() {
                               setCropSrc(URL.createObjectURL(imageFile));
                               setIsCropDialogOpen(true);
                             }}
-                            className="w-full bg-[#FAF7F2] text-black hover:bg-gray-200 text-xs font-mono"
+                            className="w-full bg-[#FAF7F2] text-black hover:bg-gray-200 text-xs font-mono mb-2"
                           >
                             <Edit2 className="h-3 w-3 mr-2" /> Crop/Resize Image
                           </Button>
                         )}
+                        <Button 
+                          type="button" 
+                          onClick={generateProductImage}
+                          disabled={isGeneratingImage || !name}
+                          className="w-full bg-[#FAF7F2] text-black hover:bg-gray-200 text-xs font-mono border border-[#3A3230]"
+                        >
+                          {isGeneratingImage ? (
+                            <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Generating...</>
+                          ) : (
+                            <><Sparkles className="h-4 w-4 mr-2" /> Auto-Generate with AI</>
+                          )}
+                        </Button>
                       </div>
                     </div>
                   </div>
@@ -1207,6 +1313,10 @@ export function Inventory() {
                 <span className="text-[#7A736E] text-xs uppercase tracking-widest">Stock</span>
                 <span className="text-[#FAF7F2]">{selectedProduct.stock} (Min: {selectedProduct.minStock})</span>
               </div>
+              <div className="flex justify-between border-b border-[#3A3230] pb-2">
+                <span className="text-[#7A736E] text-xs uppercase tracking-widest">Supplier</span>
+                <span className="text-[#FAF7F2]">{selectedProduct.supplierId ? suppliers.find(s => s.id === selectedProduct.supplierId)?.name || 'Unknown Supplier' : 'No Supplier'}</span>
+              </div>
               
               <div className="pt-2">
                 <span className="text-[#7A736E] text-xs uppercase tracking-widest block mb-1">Description</span>
@@ -1384,14 +1494,14 @@ export function Inventory() {
           <div className="flex justify-between items-center flex-wrap gap-4">
              <div className="flex items-center gap-2 flex-wrap ml-auto">
                {canEdit && (
-                 <Dialog open={isSupplierDialogOpen} onOpenChange={isOpen => {
-                   if (!isOpen) closeSupplierDialog();
-                   else openSupplierDialog();
-                 }}>
-                   <DialogTrigger render={<Button className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold" />}>
+                 <>
+                   <Button onClick={() => openSupplierDialog()} className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold">
                      <Plus className="mr-2 h-4 w-4" /> Add Supplier
-                   </DialogTrigger>
-                   <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[425px]">
+                   </Button>
+                   <Dialog open={isSupplierDialogOpen} onOpenChange={isOpen => {
+                     if (!isOpen) closeSupplierDialog();
+                   }}>
+                     <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[425px]">
                      <DialogHeader>
                        <DialogTitle>{editingSupplier ? 'Edit Supplier' : 'New Supplier'}</DialogTitle>
                      </DialogHeader>
@@ -1423,7 +1533,7 @@ export function Inventory() {
                          />
                        </div>
                        <div className="flex justify-end gap-2 pt-4">
-                         <Button type="button" variant="outline" onClick={closeSupplierDialog} className="border-[#3A3230] text-[#FAF7F2]">Cancel</Button>
+                         <Button type="button" variant="outline" onClick={closeSupplierDialog} className="border-[#3A3230] text-[#000000]">Cancel</Button>
                          <Button type="submit" disabled={isSubmitting} className="bg-[#FF6F00] text-black hover:bg-[#FF6F00]/80">
                            {isSubmitting ? 'Saving...' : 'Save'}
                          </Button>
@@ -1431,6 +1541,7 @@ export function Inventory() {
                      </form>
                    </DialogContent>
                  </Dialog>
+                 </>
                )}
              </div>
           </div>
@@ -1472,10 +1583,9 @@ export function Inventory() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => handleDeleteSupplier(supplier.id)}
+                                onClick={() => handleSupplierDeleteClick(supplier)}
                                 className="h-8 w-8 text-[#FAF7F2] hover:text-red-500 hover:bg-red-500/10"
                                 title="Delete Supplier"
-                                disabled={products.some(p => p.supplierId === supplier.id)}
                               >
                                 <Trash2 className="h-4 w-4" />
                               </Button>
@@ -1539,6 +1649,35 @@ export function Inventory() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Supplier Delete Confirmation Alert */}
+      <AlertDialog open={!!supplierToDelete} onOpenChange={(open) => !open && setSupplierToDelete(null)}>
+        <AlertDialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-red-500">Delete Supplier</AlertDialogTitle>
+            <AlertDialogDescription className="text-[#7A736E]">
+              Are you sure you want to permanently delete <span className="font-bold text-[#FAF7F2]">{supplierToDelete?.name}</span>?
+              <br /><br />
+              This action cannot be undone and will permanently remove the supplier from your records.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button 
+              variant="outline" 
+              onClick={() => setSupplierToDelete(null)} 
+              className="border-[#3A3230] bg-transparent hover:bg-[#1A1614] text-[#FAF7F2]"
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={handleDeleteSupplier}
+              className="bg-red-500 hover:bg-red-600 text-white"
+            >
+              Delete Supplier
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

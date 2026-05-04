@@ -4,10 +4,17 @@ import { db } from '../lib/firebase';
 import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
-import { PackageSearch, TrendingUp, AlertTriangle, Activity } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { PackageSearch, TrendingUp, AlertTriangle, Activity, PieChart as PieChartIcon } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Sector } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+
+// ui components
+import { Button } from '../components/ui/button';
+import { toast } from 'sonner';
+import { Loader2, Trash2 } from 'lucide-react';
+import { writeBatch, doc, getDocs } from 'firebase/firestore';
+
 
 interface Stats {
   totalProducts: number;
@@ -17,6 +24,52 @@ interface Stats {
   inventoryValueCost: number;
   inventoryValueRetail: number;
 }
+
+const renderActiveShape = (props: any) => {
+  const RADIAN = Math.PI / 180;
+  const { cx, cy, midAngle, innerRadius, outerRadius, startAngle, endAngle, fill, payload, percent, value } = props;
+  const sin = Math.sin(-RADIAN * midAngle);
+  const cos = Math.cos(-RADIAN * midAngle);
+  const sx = cx + (outerRadius + 10) * cos;
+  const sy = cy + (outerRadius + 10) * sin;
+  const mx = cx + (outerRadius + 30) * cos;
+  const my = cy + (outerRadius + 30) * sin;
+  const ex = mx + (cos >= 0 ? 1 : -1) * 22;
+  const ey = my;
+  const textAnchor = cos >= 0 ? 'start' : 'end';
+
+  return (
+    <g>
+      <text x={cx} y={cy} dy={8} textAnchor="middle" fill="#FAF7F2" className="text-xl font-bold font-mono">
+        {payload.name}
+      </text>
+      <Sector
+        cx={cx}
+        cy={cy}
+        innerRadius={innerRadius}
+        outerRadius={outerRadius + 8}
+        startAngle={startAngle}
+        endAngle={endAngle}
+        fill={fill}
+      />
+      <Sector
+        cx={cx}
+        cy={cy}
+        startAngle={startAngle}
+        endAngle={endAngle}
+        innerRadius={outerRadius + 10}
+        outerRadius={outerRadius + 14}
+        fill={fill}
+      />
+      <path d={`M${sx},${sy}L${mx},${my}L${ex},${ey}`} stroke={fill} fill="none" />
+      <circle cx={ex} cy={ey} r={2} fill={fill} stroke="none" />
+      <text x={ex + (cos >= 0 ? 1 : -1) * 12} y={ey} textAnchor={textAnchor} fill="#FAF7F2" className="text-sm font-mono">{`₱${formatCurrency(value)}`}</text>
+      <text x={ex + (cos >= 0 ? 1 : -1) * 12} y={ey} dy={18} textAnchor={textAnchor} fill="#7A736E" className="text-xs font-mono">
+        {`(Rate ${(percent * 100).toFixed(2)}%)`}
+      </text>
+    </g>
+  );
+};
 
 export function Dashboard() {
   const [stats, setStats] = useState<Stats>({ 
@@ -32,6 +85,7 @@ export function Dashboard() {
   const [salesError, setSalesError] = useState<string | null>(null);
   const [products, setProducts] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [activeIndex, setActiveIndex] = useState(0);
   const { role } = useAuth();
   const navigate = useNavigate();
 
@@ -103,8 +157,8 @@ export function Dashboard() {
 
     // Group into 'Other' if more than 5 categories
     if (sortedCategories.length > 5) {
-      const topCategories = sortedCategories.slice(0, 4);
-      const otherValue = sortedCategories.slice(4).reduce((acc, curr) => acc + curr.value, 0);
+      const topCategories = sortedCategories.slice(0, 5);
+      const otherValue = sortedCategories.slice(5).reduce((acc, curr) => acc + curr.value, 0);
       topCategories.push({ name: 'Other', value: otherValue });
       return topCategories;
     }
@@ -142,27 +196,31 @@ export function Dashboard() {
       const dataMap = new Map<string, number>();
       const txs: any[] = [];
 
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       snapshot.forEach((doc) => {
         const data = doc.data();
         txs.push({ id: doc.id, ...data });
-        if (data.status === 'COMPLETED') {
+        
+        let date: Date | null = null;
+        if (data.createdAt) {
+          if (typeof data.createdAt?.toDate === 'function') {
+            date = data.createdAt.toDate();
+          } else {
+            // Fallback for timestamp alternatives or strings
+            date = new Date(data.createdAt.seconds ? data.createdAt.seconds * 1000 : data.createdAt);
+          }
+        }
+
+        if (data.status === 'COMPLETED' && date && date >= today) {
           totalSales += data.totalAmount;
           recentCount++;
           
-          if (data.createdAt) {
-            let date;
-            if (typeof data.createdAt?.toDate === 'function') {
-              date = data.createdAt.toDate();
-            } else {
-              // Fallback for timestamp alternatives or strings
-              date = new Date(data.createdAt.seconds ? data.createdAt.seconds * 1000 : data.createdAt);
-            }
-
-            if (!isNaN(date.getTime())) {
-              const hour = date.getHours().toString().padStart(2, '0');
-              const label = `${hour}:00`;
-              dataMap.set(label, (dataMap.get(label) || 0) + data.totalAmount);
-            }
+          if (!isNaN(date.getTime())) {
+            const hour = date.getHours().toString().padStart(2, '0');
+            const label = `${hour}:00`;
+            dataMap.set(label, (dataMap.get(label) || 0) + data.totalAmount);
           }
         }
       });
@@ -283,10 +341,13 @@ export function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[400px]">
         {/* Main Chart */}
         <Card className="bg-[#141210] border-[#3A3230] lg:col-span-2 flex flex-col min-h-[350px]">
-          <CardHeader>
-            <CardTitle className="text-sm font-mono text-[#7A736E]">REVENUE MONITORING (HOURLY)</CardTitle>
+          <CardHeader className="border-b border-[#3A3230]/50 pb-4">
+            <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
+              <Activity className="h-4 w-4 text-[#FF6F00]" />
+              REVENUE MONITORING (HOURLY)
+            </CardTitle>
           </CardHeader>
-          <CardContent className="h-[300px] w-full">
+          <CardContent className="h-[300px] w-full pt-4">
              {isLoadingSales ? (
                <div className="h-full w-full flex items-center justify-center font-mono text-[#7A736E] animate-pulse">
                  SYNCING DATA...
@@ -305,15 +366,16 @@ export function Dashboard() {
                          <stop offset="95%" stopColor="#FF6F00" stopOpacity={0}/>
                        </linearGradient>
                      </defs>
-                     <CartesianGrid strokeDasharray="3 3" stroke="#3A3230" vertical={false} />
-                     <XAxis dataKey="name" stroke="#7A736E" fontSize={12} tickLine={false} axisLine={false} tickMargin={10} />
-                     <YAxis stroke="#7A736E" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `₱${formatCurrency(value)}`} tickMargin={10} />
+                     <CartesianGrid strokeDasharray="3 3" stroke="#3A3230" vertical={false} opacity={0.5} />
+                     <XAxis dataKey="name" stroke="#7A736E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickMargin={12} minTickGap={20} />
+                     <YAxis stroke="#7A736E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickFormatter={(value) => `₱${formatCurrency(value)}`} tickMargin={12} width={65} />
                      <Tooltip 
-                       contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px' }}
-                       itemStyle={{ color: '#FF6F00' }}
+                       contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6)' }}
+                       itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px', fontFamily: 'monospace' }}
+                       labelStyle={{ color: '#7A736E', marginBottom: '4px', fontSize: '12px' }}
                        formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
                      />
-                     <Area type="monotone" dataKey="sales" stroke="#FF6F00" strokeWidth={3} fillOpacity={1} fill="url(#colorSales)" activeDot={{ r: 6, fill: '#FF6F00', stroke: '#141210', strokeWidth: 2 }} />
+                     <Area type="natural" dataKey="sales" stroke="#FF6F00" strokeWidth={3} fillOpacity={1} fill="url(#colorSales)" activeDot={{ r: 6, fill: '#FF6F00', stroke: '#1A1614', strokeWidth: 3 }} />
                    </AreaChart>
                  </ResponsiveContainer>
                </div>
@@ -328,12 +390,12 @@ export function Dashboard() {
           <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
              <Activity className="h-32 w-32" />
           </div>
-          <CardHeader>
-            <CardTitle className="text-sm font-mono text-[#1D9E75] flex items-center gap-2 uppercase tracking-wide">
-              <span>●</span> AI ASSISTANT (GEMINI)
+          <CardHeader className="border-b border-[#3A3230]/50 pb-4">
+            <CardTitle className="text-sm font-mono text-[#1D9E75] flex items-center gap-2 uppercase tracking-widest">
+              <span className="animate-pulse">●</span> AI ASSISTANT (GEMINI)
             </CardTitle>
           </CardHeader>
-          <CardContent className="flex-1 flex flex-col">
+          <CardContent className="flex-1 flex flex-col pt-4">
             <div className="space-y-4 flex-1">
                {forecastData && forecastData.length > 0 ? (
                  <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
@@ -374,8 +436,9 @@ export function Dashboard() {
         <div className="lg:col-span-2">
           <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px]">
             <CardHeader className="border-b border-[#3A3230]/50 pb-4">
-              <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-wide">
-                Stockout Predictions & Order Suggestions
+              <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-[#FF6F00]" />
+                Stockout Predictions & Suggestions
               </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 p-0">
@@ -442,7 +505,10 @@ export function Dashboard() {
         <div className="lg:col-span-1">
           <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px] h-full">
             <CardHeader className="border-b border-[#3A3230]/50 pb-4">
-              <CardTitle className="text-sm font-mono text-[#7A736E] uppercase">Sales By Category</CardTitle>
+              <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
+                <PieChartIcon className="h-4 w-4 text-[#1D9E75]" />
+                Sales By Category
+              </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 w-full relative pt-4 flex flex-col items-center justify-center">
               {isLoadingSales ? (
@@ -458,78 +524,33 @@ export function Dashboard() {
               ) : salesByCategory.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
                   <PieChart>
-                    <defs>
-                      <filter id="shadow3d" x="-20%" y="-20%" width="140%" height="140%">
-                        <feDropShadow dx="0" dy="12" stdDeviation="5" floodOpacity="0.6" floodColor="#000000" />
-                      </filter>
-                      {salesByCategory.map((entry, index) => (
-                        <linearGradient id={`topGrad-${index}`} key={`top-${index}`} x1="0%" y1="0%" x2="0%" y2="100%">
-                          <stop offset="0%" stopColor={COLORS[index % COLORS.length]} stopOpacity={1} />
-                          <stop offset="100%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.7} />
-                        </linearGradient>
-                      ))}
-                      {salesByCategory.map((entry, index) => (
-                        <linearGradient id={`sideGrad-${index}`} key={`side-${index}`} x1="0%" y1="0%" x2="0%" y2="100%">
-                          <stop offset="0%" stopColor={COLORS[index % COLORS.length]} stopOpacity={0.4} />
-                          <stop offset="100%" stopColor="#000000" stopOpacity={0.7} />
-                        </linearGradient>
-                      ))}
-                    </defs>
-
-                    {/* Shadow & 3D Base (Side Layer) */}
                     <Pie
+                      // @ts-ignore
+                      activeIndex={activeIndex}
+                      activeShape={renderActiveShape}
                       data={salesByCategory}
                       cx="50%"
-                      cy="48%"
-                      innerRadius={60}
-                      outerRadius={90}
-                      paddingAngle={6}
+                      cy="45%"
+                      innerRadius={50}
+                      outerRadius={70}
                       dataKey="value"
+                      onMouseEnter={(_, index) => setActiveIndex(index)}
                       stroke="none"
-                      cornerRadius={6}
-                      filter="url(#shadow3d)"
-                      isAnimationActive={true}
                     >
                       {salesByCategory.map((entry, index) => (
-                        <Cell key={`side-cell-${index}`} fill={`url(#sideGrad-${index})`} style={{ pointerEvents: 'none' }} />
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                       ))}
                     </Pie>
-
-                    {/* Top Surface Layer */}
-                    <Pie
-                      data={salesByCategory}
-                      cx="50%"
-                      cy="44%"
-                      innerRadius={60}
-                      outerRadius={90}
-                      paddingAngle={6}
-                      dataKey="value"
-                      stroke="none"
-                      cornerRadius={6}
-                      isAnimationActive={true}
-                    >
-                      {salesByCategory.map((entry, index) => (
-                        <Cell 
-                          key={`top-cell-${index}`} 
-                          fill={`url(#topGrad-${index})`} 
-                          stroke="rgba(255,255,255,0.15)"
-                          strokeWidth={1}
-                          style={{ filter: 'drop-shadow(0px 1px 1px rgba(255,255,255,0.2))' }}
-                        />
-                      ))}
-                    </Pie>
-
                     <Tooltip 
                       contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6)' }}
                       itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px' }}
-                      formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
-                      labelStyle={{ display: 'none' }}
+                      formatter={(value: number, name: string) => [`₱${formatCurrency(value)}`, name]}
                     />
                     <Legend 
                       verticalAlign="bottom" 
                       height={40} 
                       iconType="circle"
-                      formatter={(value) => <span className="text-xs font-mono text-[#FAF7F2] ml-1">{value}</span>}
+                      formatter={(value) => <span className="text-[10px] font-mono text-[#FAF7F2] ml-1">{value}</span>}
                     />
                   </PieChart>
                 </ResponsiveContainer>

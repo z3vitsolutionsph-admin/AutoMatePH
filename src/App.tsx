@@ -13,6 +13,7 @@ import { Inventory } from './pages/Inventory';
 import { Dashboard } from './pages/Dashboard';
 import { ActivityLog } from './pages/ActivityLog';
 import { UserManagement } from './pages/UserManagement';
+import { Reports } from './pages/Reports';
 
 const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode, allowedRoles?: string[] }) => {
   const { user, role, loading } = useAuth();
@@ -60,6 +61,11 @@ export default function App() {
             <Route path="activityLog" element={
               <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
                 <ActivityLog />
+              </ProtectedRoute>
+            } />
+            <Route path="reports" element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
+                <Reports />
               </ProtectedRoute>
             } />
             <Route path="users" element={
