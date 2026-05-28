@@ -94,6 +94,17 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
 - **totalAmount** (number): Total cost of the order.
 - **createdBy** (string): User ID of the creator.
 
+### Promotion (`/promotions/{promotionId}`)
+- **code** (string): Custom or auto-generated coupon code.
+- **name** (string): Promotion name.
+- **type** (string): `PERCENTAGE`, `FIXED`, `BOGO`.
+- **value** (number): Amount to discount.
+- **targetType** (string): `ORDER`, `PRODUCT`, `CATEGORY`.
+- **targetIds** (array): List of target strings (product IDs or categories).
+- **startDate** (string): ISO string or Firebase Timestamp.
+- **endDate** (string): ISO string or Firebase Timestamp.
+- **active** (boolean): Is promotion currently active.
+
 ## File Structure Guidelines
 - `/src/pages`: Feature-based React pages (`Dashboard.tsx`, `POS.tsx`, `Inventory.tsx`, `ActivityLog.tsx`).
 - `/src/components`: Reusable UI (`Layout.tsx`, `TerminalChat.tsx`).

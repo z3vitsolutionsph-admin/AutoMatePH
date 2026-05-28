@@ -119,6 +119,21 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidPromotion(data) {
+      return data.keys().hasAll(["name", "type", "value", "targetType", "active", "createdAt", "updatedAt"])
+        && (data.get('code', '') is string) && data.get('code', '').size() <= 50
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 200
+        && data.type in ["PERCENTAGE", "FIXED", "BOGO"]
+        && data.value is number && data.value >= 0
+        && data.targetType in ["ORDER", "PRODUCT", "CATEGORY"]
+        && (data.get('targetIds', []) is list)
+        && (data.get('startDate', '') is string)
+        && (data.get('endDate', '') is string)
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // --- COLLECTIONS ---
 
     match /users/{userId} {
@@ -145,16 +160,16 @@ service cloud.firestore {
     }
 
     match /products/{productId} {
-      allow get: if isCashierOrHigher();
-      allow list: if isCashierOrHigher();
+      allow get: if isCashierOrHigher() || isInventoryClerkOrHigher();
+      allow list: if isCashierOrHigher() || isInventoryClerkOrHigher();
       
-      allow create: if isStoreManager()
+      allow create: if isStoreManager() || isInventoryClerkOrHigher()
         && isValidId(productId)
         && isValidProduct(incoming())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
         
-      allow update: if (isStoreManager() && 
+      allow update: if (isStoreManager() || isInventoryClerkOrHigher() && 
           incoming().diff(existing()).affectedKeys().hasOnly([
             'barcode', 'name', 'price', 'cost', 'stock', 'minStock', 
             'category', 'description', 'imageUrl', 'supplierId', 'updatedAt'
@@ -242,6 +257,29 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'contact', 'address', 'updatedAt']);
+        
+      allow delete: if isSuperAdmin();
+    }
+
+    match /promotions/{promotionId} {
+      allow get: if isCashierOrHigher();
+      allow list: if isCashierOrHigher();
+      
+      allow create: if isStoreManager()
+        && isValidId(promotionId)
+        && isValidPromotion(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+        
+      allow update: if isStoreManager()
+        && isValidId(promotionId)
+        && isValidPromotion(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'code', 'name', 'type', 'value', 'targetType', 'targetIds', 
+          'startDate', 'endDate', 'active', 'updatedAt'
+        ]);
         
       allow delete: if isSuperAdmin();
     }

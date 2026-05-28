@@ -513,12 +513,16 @@ export function Inventory() {
           const file = new File([blob], "generated_product.jpg", { type: blob.type || "image/jpeg" });
           setImageFile(file);
           setImageUrl('');
-          toast.success("Image generated successfully");
+          setCropSrc(URL.createObjectURL(file));
+          setIsCropDialogOpen(true);
+          toast.success("Image generated successfully. You can crop it now.");
         } catch (e) {
           console.error("Error converting generated image to file:", e);
           setImageUrl(generatedImageUrl);
           setImageFile(null);
-          toast.success("Image generated successfully, but not converted to file.");
+          setCropSrc(generatedImageUrl);
+          setIsCropDialogOpen(true);
+          toast.success("Image generated successfully. You can crop it now.");
         }
       } else {
         toast.error('Failed to generate image. Try again.');
@@ -1025,11 +1029,15 @@ export function Inventory() {
                           }}
                           className="bg-[#0A0C10] border-[#3A3230] focus-visible:ring-[#FF6F00] w-full text-sm text-[#FAF7F2] file:mr-4 file:py-1 file:px-4 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-[#1A1614] file:text-[#FAF7F2] hover:file:bg-[#3A3230]" 
                         />
-                        {imageFile && (
+                        {(imageFile || imageUrl) && (
                           <Button 
                             type="button" 
                             onClick={() => {
-                              setCropSrc(URL.createObjectURL(imageFile));
+                              if (imageFile) {
+                                setCropSrc(URL.createObjectURL(imageFile));
+                              } else {
+                                setCropSrc(imageUrl);
+                              }
                               setIsCropDialogOpen(true);
                             }}
                             className="w-full bg-[#FAF7F2] text-black hover:bg-gray-200 text-xs font-mono mb-2"

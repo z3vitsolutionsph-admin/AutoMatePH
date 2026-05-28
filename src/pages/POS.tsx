@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff, Camera, X, Printer, CheckCircle2 } from 'lucide-react';
+import { ShoppingCart, Search, CreditCard, Wallet, Banknote, Plus, Minus, Trash2, WifiOff, Camera, X, Printer, CheckCircle2, Tag } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -31,11 +31,29 @@ interface Product {
 interface CartItem extends Product {
   quantity: number;
   subtotal: number;
+  discountAmount?: number;
+  originalSubtotal?: number;
+}
+
+interface Promotion {
+  id: string;
+  code: string;
+  name: string;
+  type: 'PERCENTAGE' | 'FIXED' | 'BOGO';
+  value: number;
+  targetType: 'ORDER' | 'PRODUCT' | 'CATEGORY';
+  targetIds: string[];
+  startDate: string;
+  endDate: string;
+  active: boolean;
 }
 
 export function POS() {
   const [products, setProducts] = useState<Product[]>([]);
+  const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [appliedPromo, setAppliedPromo] = useState<Promotion | null>(null);
+  const [promoCodeInput, setPromoCodeInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -133,10 +151,25 @@ export function POS() {
        handleFirestoreError(error, OperationType.GET, 'products');
     });
 
+    // Fetch active promotions
+    const unsubscribePromos = onSnapshot(collection(db, 'promotions'), (snapshot) => {
+      const promos: Promotion[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.active) {
+          promos.push({ id: doc.id, ...data } as Promotion);
+        }
+      });
+      setPromotions(promos);
+    }, (error) => {
+      console.error('Failed to load promotions', error);
+    });
+
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       unsubscribe();
+      unsubscribePromos();
     };
   }, []);
 
@@ -352,7 +385,89 @@ export function POS() {
     setCart(prev => prev.filter(item => item.id !== id));
   };
 
-  const total = cart.reduce((sum, item) => sum + item.subtotal, 0);
+  const applyPromoCode = () => {
+    if (!promoCodeInput.trim()) {
+      toast.error('Please enter a promo code');
+      return;
+    }
+    
+    // Find matching active promo
+    const now = new Date();
+    const promo = promotions.find(p => {
+      if (p.code !== promoCodeInput.toUpperCase().trim()) return false;
+      if (!p.active) return false;
+      
+      // Check date validity if exists
+      if (p.startDate && new Date(p.startDate) > now) return false;
+      if (p.endDate) {
+        const end = new Date(p.endDate);
+        end.setHours(23, 59, 59, 999);
+        if (end < now) return false;
+      }
+      return true;
+    });
+
+    if (!promo) {
+      toast.error('Invalid or expired promo code');
+      setAppliedPromo(null);
+      return;
+    }
+
+    setAppliedPromo(promo);
+    toast.success(`Promo code applied: ${promo.name}`);
+    setPromoCodeInput('');
+  };
+
+  // Replace manual total with memoized total logic that includes promo discount
+  const { subtotal, discountAmount, total } = useMemo(() => {
+    let sub = 0;
+    
+    // Process base cart items and BOGO implicitly
+    cart.forEach(item => {
+      sub += item.subtotal;
+    });
+    
+    let discount = 0;
+
+    if (appliedPromo) {
+      if (appliedPromo.targetType === 'ORDER') {
+        if (appliedPromo.type === 'PERCENTAGE') {
+          discount = sub * (appliedPromo.value / 100);
+        } else if (appliedPromo.type === 'FIXED') {
+          discount = appliedPromo.value;
+        }
+      } else if (appliedPromo.targetType === 'PRODUCT' || appliedPromo.targetType === 'CATEGORY') {
+        // Calculate item-specific discounts
+        cart.forEach(item => {
+          let matches = false;
+          if (appliedPromo.targetType === 'PRODUCT' && appliedPromo.targetIds.includes(item.barcode)) {
+            matches = true;
+          } else if (appliedPromo.targetType === 'CATEGORY' && item.category && appliedPromo.targetIds.includes(item.category)) {
+            matches = true;
+          }
+          
+          if (matches) {
+            if (appliedPromo.type === 'PERCENTAGE') {
+              discount += item.subtotal * (appliedPromo.value / 100);
+            } else if (appliedPromo.type === 'FIXED') {
+              // Apply fixed discount per matching item (or overall, depending on logic, here we'll cap it at subtotal)
+              discount += Math.min(item.subtotal, appliedPromo.value * item.quantity);
+            } else if (appliedPromo.type === 'BOGO') {
+              // Buy 1 Get 1 -> every 2 items, 1 is free
+              const freeItems = Math.floor(item.quantity / 2);
+              discount += freeItems * item.price;
+            }
+          }
+        });
+      }
+    }
+    
+    // Ensure discount doesn't exceed subtotal
+    discount = Math.min(discount, sub);
+    const finalTotal = sub - discount;
+    
+    return { subtotal: sub, discountAmount: discount, total: finalTotal };
+  }, [cart, appliedPromo]);
 
   const initiateCheckout = (paymentMethod: string) => {
     if (cart.length === 0) return;
@@ -377,6 +492,9 @@ export function POS() {
 
     const transactionData = {
       totalAmount: total,
+      subtotalAmount: subtotal,
+      discountAmount,
+      promoApplied: appliedPromo ? appliedPromo.id : null,
       paymentMethod,
       cashierId,
       items: cart.map(item => ({
@@ -458,6 +576,8 @@ export function POS() {
 
   const closeReceiptAndNewTransaction = () => {
     setCart([]);
+    setAppliedPromo(null);
+    setPromoCodeInput('');
     setCompletedTx(null);
     setCashReceived('');
     setReceiptModalOpen(false);
@@ -669,16 +789,57 @@ export function POS() {
           )}
         </div>
 
+        {/* Promo Input Section */}
+        <div className="bg-[#141210] border-t border-[#3A3230] p-3">
+          <div className="flex items-center gap-2">
+             <div className="flex-1 relative">
+                <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#7A736E]" />
+                <Input 
+                  value={promoCodeInput}
+                  onChange={e => setPromoCodeInput(e.target.value)}
+                  placeholder="Promo Code" 
+                  className="bg-[#0A0C10] border-[#3A3230] pl-8 h-8 text-xs font-mono uppercase text-[#FAF7F2]"
+                  onKeyDown={e => e.key === 'Enter' && applyPromoCode()}
+                  disabled={cart.length === 0}
+                />
+             </div>
+             <Button 
+               onClick={applyPromoCode}
+               disabled={!promoCodeInput.trim() || cart.length === 0}
+               className="bg-[#3A3230] hover:bg-[#FF6F00] text-[#FAF7F2] h-8 text-xs px-3 font-mono"
+             >
+               Apply
+             </Button>
+          </div>
+          {appliedPromo && (
+             <div className="mt-2 text-[10px] font-mono flex items-center justify-between bg-[#1D9E75]/10 border border-[#1D9E75]/30 p-1.5 rounded">
+                <div className="flex items-center gap-1.5 text-[#1D9E75]">
+                   <CheckCircle2 className="h-3 w-3" />
+                   <span>{appliedPromo.name}</span>
+                </div>
+                <button onClick={() => setAppliedPromo(null)} className="text-[#1D9E75] hover:text-red-500 hover:scale-110 transition-transform">
+                  <X className="h-3 w-3" />
+                </button>
+             </div>
+          )}
+        </div>
+
         <div className="p-4 bg-[#1A1614] flex flex-col gap-4 border-t-2 border-[#FF6F00]">
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-end">
             <div className="flex gap-8">
                <div>
                   <p className="text-[10px] text-[#7A736E] uppercase font-mono mb-1">Items</p>
-                  <p className="text-xl font-bold font-mono text-[#FAF7F2]">{cart.reduce((s, i) => s + i.quantity, 0).toString().padStart(2, '0')}</p>
+                  <p className="text-lg font-bold font-mono text-[#FAF7F2] leading-none">{cart.reduce((s, i) => s + i.quantity, 0).toString().padStart(2, '0')}</p>
                </div>
             </div>
-            <div className="text-right">
-              <p className="text-xs text-[#FF6F00] uppercase font-bold tracking-widest">Total Due</p>
+            <div className="text-right flex flex-col gap-1">
+              {discountAmount > 0 && (
+                <div className="flex items-center justify-end gap-2 text-[#7A736E]">
+                  <span className="text-[10px] font-mono uppercase line-through">Sub: ₱{formatCurrency(subtotal)}</span>
+                  <span className="text-[10px] font-mono uppercase bg-[#1D9E75]/20 text-[#1D9E75] px-1 rounded">-₱{formatCurrency(discountAmount)}</span>
+                </div>
+              )}
+              <p className="text-xs text-[#FF6F00] uppercase font-bold tracking-widest mt-1">Total Due</p>
               <motion.p 
                 key={total}
                 initial={{ scale: 1.1, color: '#FF6F00' }}

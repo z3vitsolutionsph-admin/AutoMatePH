@@ -92,9 +92,32 @@
         "updatedAt": { "type": "string" }
       },
       "required": ["supplierName", "orderDate", "expectedDeliveryDate", "items", "status", "totalAmount", "createdBy", "createdAt", "updatedAt"]
+    },
+    "Promotion": {
+      "title": "Promotion",
+      "description": "A discount rule for products, categories, or overall orders",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["PERCENTAGE", "FIXED", "BOGO"] },
+        "value": { "type": "number" },
+        "targetType": { "type": "string", "enum": ["ORDER", "PRODUCT", "CATEGORY"] },
+        "targetIds": { "type": "array" },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["name", "type", "value", "targetType", "active", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
+    "/promotions/{promotionId}": {
+      "schema": { "$ref": "#/entities/Promotion" },
+      "description": "Discount and promotion rules"
+    },
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/User" },
       "description": "User profiles and roles"

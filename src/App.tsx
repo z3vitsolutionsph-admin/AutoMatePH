@@ -14,6 +14,7 @@ import { Dashboard } from './pages/Dashboard';
 import { ActivityLog } from './pages/ActivityLog';
 import { UserManagement } from './pages/UserManagement';
 import { Reports } from './pages/Reports';
+import { Promotions } from './pages/Promotions';
 
 const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode, allowedRoles?: string[] }) => {
   const { user, role, loading } = useAuth();
@@ -22,8 +23,10 @@ const ProtectedRoute = ({ children, allowedRoles }: { children: React.ReactNode,
   
   // If allowedRoles is provided, check if user has required role
   if (allowedRoles && role && !allowedRoles.includes(role)) {
-    // Redirect to POS as a safe fallback if they're a cashier or don't have access to current route
-    return <Navigate to={role === 'CASHIER' ? '/pos' : '/'} replace />;
+    // Redirect to safe fallback depending on role
+    if (role === 'CASHIER') return <Navigate to="/pos" replace />;
+    if (role === 'INVENTORY_CLERK') return <Navigate to="/inventory" replace />;
+    return <Navigate to="/" replace />;
   }
   
   return <>{children}</>;
@@ -54,8 +57,13 @@ export default function App() {
               </ProtectedRoute>
             } />
             <Route path="inventory" element={
-              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER', 'INVENTORY_CLERK']}>
                 <Inventory />
+              </ProtectedRoute>
+            } />
+            <Route path="promotions" element={
+              <ProtectedRoute allowedRoles={['SUPER_ADMIN', 'STORE_MANAGER']}>
+                <Promotions />
               </ProtectedRoute>
             } />
             <Route path="activityLog" element={

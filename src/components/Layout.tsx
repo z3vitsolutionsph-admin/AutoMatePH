@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { Package, ShoppingCart, LayoutDashboard, LogOut, Activity, Terminal, Users, BarChart3 } from 'lucide-react';
+import { Package, ShoppingCart, LayoutDashboard, LogOut, Activity, Terminal, Users, BarChart3, Tag } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Toaster } from './ui/sonner';
 import { TerminalChat } from './TerminalChat';
@@ -20,7 +20,8 @@ export function Layout() {
   const navItems = [
     { label: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Point of Sale', path: '/pos', icon: ShoppingCart, roles: ['SUPER_ADMIN', 'STORE_MANAGER', 'CASHIER'] },
-    { label: 'Inventory', path: '/inventory', icon: Package, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
+    { label: 'Inventory', path: '/inventory', icon: Package, roles: ['SUPER_ADMIN', 'STORE_MANAGER', 'INVENTORY_CLERK'] },
+    { label: 'Promotions', path: '/promotions', icon: Tag, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Reports', path: '/reports', icon: BarChart3, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Activity', path: '/activityLog', icon: Activity, roles: ['SUPER_ADMIN', 'STORE_MANAGER'] },
     { label: 'Users & Roles', path: '/users', icon: Users, roles: ['SUPER_ADMIN'] },
