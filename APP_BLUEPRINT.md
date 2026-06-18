@@ -14,7 +14,13 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
   - `html2canvas` & `jspdf` for QR code PDF generation
   - `react-to-print` for printing functionality
   - `recharts` for Dashboard charts
-  - `@google/genai` (Gemini 2.5 Flash) for Foresight AI Terminal
+  - `@google/genai` (Gemini 2.5 Flash) via Backend Proxy for Foresight AI Terminal
+
+## Backend Architecture (AI Proxy)
+- **Framework**: Express (Node.js)
+- **Endpoint**: `POST /api/chat`
+- **Purpose**: Securely handles Gemini AI requests to prevent API key exposure in the frontend.
+- **Environment**: Requires `GEMINI_API_KEY` set in the server environment.
 
 ## Core Features
 1. **Dashboard**: 

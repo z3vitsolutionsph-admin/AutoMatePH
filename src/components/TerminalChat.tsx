@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Terminal, X, Send, Maximize2, Minimize2, AlertCircle } from 'lucide-react';
 import { Card } from './ui/card';
-import { GoogleGenAI } from '@google/genai';
 import { formatCurrency } from '../lib/utils';
 import { db } from '../lib/firebase';
 import { collection, getDocs, limit, query, orderBy } from 'firebase/firestore';
@@ -161,15 +160,7 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     setInput('');
     setIsTyping(true);
 
-    if (!process.env.GEMINI_API_KEY) {
-      setMessages(prev => [...prev, { role: 'error', text: '[ERROR: GEMINI_API_KEY NOT CONFIGURED IN ENVIRONMENT]' }]);
-      setIsTyping(false);
-      return;
-    }
-
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
       const context = await Promise.race([
         fetchContext(),
         new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Context fetch timeout")), 8000))
@@ -191,15 +182,21 @@ ${historyStr}
 Operator: ${userMsg}
 AI:`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          temperature: 0.2, // low temp for analytical consistency
-        }
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ prompt }),
       });
 
-      setMessages(prev => [...prev, { role: 'model', text: response.text || 'No response.' }]);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'FAILED TO CONNECT TO CORE INTELLIGENCE');
+      }
+
+      const data = await response.json();
+      setMessages(prev => [...prev, { role: 'model', text: data.text || 'No response.' }]);
     } catch (err: any) {
       console.error("AI Insights Error:", err);
       const errMsg = err.message || 'FAILED TO CONNECT TO CORE INTELLIGENCE';
