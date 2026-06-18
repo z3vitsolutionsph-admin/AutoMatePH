@@ -11,7 +11,7 @@ import { db, auth } from '../lib/firebase';
 import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch, increment } from 'firebase/firestore';
 import { dbLocal } from '../lib/db';
 import { handleFirestoreError, OperationType } from '../lib/firestore-error';
-import { formatCurrency } from '../lib/utils';
+import { formatCurrency, playBeep } from '../lib/utils';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import Fuse from 'fuse.js';
 import { useDebounce } from '../hooks/useDebounce';
@@ -195,26 +195,6 @@ export function POS() {
       }
     }
   }, [searchQuery, products]);
-
-  const playBeep = () => {
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-      
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-      
-      oscillator.type = 'sine';
-      oscillator.frequency.value = 800;
-      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-      
-      oscillator.start();
-      setTimeout(() => oscillator.stop(), 100);
-    } catch (e) {
-      console.error("Audio beep failed", e);
-    }
-  };
 
   const lastScannedBarcode = useRef<string | null>(null);
   const lastScanTime = useRef<number>(0);
