@@ -11,7 +11,7 @@ This file serves as the canonical source of truth for the AutoMatePH project arc
 - **Database/Backend**: Firebase Firestore, Firebase Authentication
 - **Special Integrations**: 
   - `@zxing/library` for Barcode Scanning
-  - `html2canvas` & `jspdf` for QR code PDF generation
+  - `html-to-image` & `jspdf` for QR code PDF generation
   - `react-to-print` for printing functionality
   - `recharts` for Dashboard charts
   - `@google/genai` (Gemini 2.5 Flash) for Foresight AI Terminal
