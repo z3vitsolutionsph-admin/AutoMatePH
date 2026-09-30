@@ -1,8 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, auth, storage } from '../lib/firebase';
-import { collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { db, auth, storage, collection, addDoc, updateDoc, doc, deleteDoc, onSnapshot, serverTimestamp } from '../lib/realtime';
 import { formatCurrency } from '../lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
@@ -18,11 +15,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../components/ui/alert-dialog';
-import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer, AlertTriangle, Download, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, Search, Edit2, Camera, X, Trash2, Wand2, QrCode, Printer, AlertTriangle, Download, Sparkles, Loader2, Barcode as BarcodeIcon } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import { QRCodeSVG } from 'qrcode.react';
+import BarcodeComponent from 'react-barcode';
 import Fuse from 'fuse.js';
 
 import { useReactToPrint } from 'react-to-print';
@@ -33,7 +31,6 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { PurchaseOrders } from '../components/PurchaseOrders';
 import imageCompression from 'browser-image-compression';
-import { GoogleGenAI } from '@google/genai';
 import ReactCrop, { type Crop } from 'react-image-crop';
 import 'react-image-crop/dist/ReactCrop.css';
 
@@ -76,9 +73,13 @@ export function Inventory() {
     return null;
   });
 
-  // Clear location state after reading
+  // Synchronize location state changes for reordering
   useEffect(() => {
     if (location.state?.createPO) {
+      setActiveTab('purchase_orders');
+      if (location.state?.productId && location.state?.qty) {
+        setPrefilledPOItem({ productId: location.state.productId, qty: location.state.qty });
+      }
       navigate('/inventory', { replace: true, state: {} });
     }
   }, [location.state, navigate]);
@@ -89,12 +90,15 @@ export function Inventory() {
   };
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [isQrDialogOpen, setIsQrDialogOpen] = useState(false);
+  const [isBarcodeDialogOpen, setIsBarcodeDialogOpen] = useState(false);
   const [qrProduct, setQrProduct] = useState<Product | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const { role } = useAuth();
   
   const qrPrintRef = useRef<HTMLDivElement>(null);
   const batchQrPrintRef = useRef<HTMLDivElement>(null);
+  const barcodePrintRef = useRef<HTMLDivElement>(null);
+  const batchBarcodePrintRef = useRef<HTMLDivElement>(null);
   
   const handlePrintQR = useReactToPrint({
     contentRef: qrPrintRef,
@@ -104,6 +108,16 @@ export function Inventory() {
   const handlePrintBatchQR = useReactToPrint({
     contentRef: batchQrPrintRef,
     documentTitle: 'Batch_Product_QR_Codes',
+  });
+
+  const handlePrintBarcode = useReactToPrint({
+    contentRef: barcodePrintRef,
+    documentTitle: qrProduct ? `Barcode_${qrProduct.name}` : 'Product_Barcode',
+  });
+
+  const handlePrintBatchBarcode = useReactToPrint({
+    contentRef: batchBarcodePrintRef,
+    documentTitle: 'Batch_Product_Barcodes',
   });
 
   const handleDownloadQRPDF = async () => {
@@ -193,13 +207,13 @@ export function Inventory() {
       const prods: Product[] = [];
       snapshot.forEach((doc) => prods.push({ id: doc.id, ...doc.data() } as Product));
       setProducts(prods);
-    }, (error) => handleFirestoreError(error, OperationType.GET, 'products'));
+    }, (error) => console.error('Error fetching products:', error));
 
     const unsubscribeSuppliers = onSnapshot(collection(db, 'suppliers'), (snapshot) => {
       const supps: Supplier[] = [];
       snapshot.forEach((doc) => supps.push({ id: doc.id, ...doc.data() } as Supplier));
       setSuppliers(supps);
-    }, (error) => handleFirestoreError(error, OperationType.GET, 'suppliers'));
+    }, (error) => console.error('Error fetching suppliers:', error));
 
     return () => {
       unsubscribeProducts();
@@ -290,8 +304,9 @@ export function Inventory() {
         toast.success('Supplier created');
       }
       closeSupplierDialog();
-    } catch (error) {
-      handleFirestoreError(error, editingSupplier ? OperationType.UPDATE : OperationType.CREATE, 'suppliers');
+    } catch (error: any) {
+      console.error('Supplier operation error:', error);
+      toast.error(error.message || 'Supplier operation failed');
     } finally {
       setIsSubmitting(false);
     }
@@ -303,8 +318,9 @@ export function Inventory() {
       await deleteDoc(doc(db, 'suppliers', supplierToDelete.id));
       toast.success('Supplier deleted successfully');
       setSupplierToDelete(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'suppliers');
+    } catch (error: any) {
+      console.error('Delete supplier error:', error);
+      toast.error(error.message || 'Failed to delete supplier');
     }
   };
 
@@ -432,31 +448,30 @@ export function Inventory() {
 
     try {
       setIsGeneratingDesc(true);
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const prompt = `Write a short, engaging description (max 2 sentences) for a product named "${name}"${category ? ` in the ${category} category` : ''}. Keep it concise and professional.`;
-      
-      let contents: any = prompt;
-      if (base64Image) {
-        contents = {
-          parts: [
-            { text: prompt + " Here is an image of the product to help you write the description." },
-            { inlineData: { mimeType, data: base64Image } }
-          ]
-        };
-      }
-      
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: contents
+      const res = await fetch('/api/ai/description', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          category,
+          imageBase64: base64Image,
+          mimeType,
+        }),
       });
-      
-      if (response.text) {
-        setDescription(response.text.trim());
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to generate description');
+      }
+
+      const data = await res.json();
+      if (data.description) {
+        setDescription(data.description);
         toast.success("Description generated");
       }
-    } catch (err) {
-      toast.error('Failed to generate description. Ensure Gemini key is set.');
-      console.error('Gemini error:', err);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate description. Ensure Gemini key is set.');
+      console.error('AI description error:', err);
     } finally {
       setIsGeneratingDesc(false);
     }
@@ -470,7 +485,6 @@ export function Inventory() {
     
     try {
       setIsGeneratingImage(true);
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
       let supplierNameText = '';
       if (supplierId) {
         const supplier = suppliers.find(s => s.id === supplierId);
@@ -478,38 +492,29 @@ export function Inventory() {
           supplierNameText = supplier.name;
         }
       }
-      const prompt = `Photorealistic, accurate studio product photography of the real-world product: ${name} ${category ? `(${category})` : ''} ${supplierNameText ? `by ${supplierNameText}` : ''}. Exact brand packaging and appearance. Centered, extreme detail, 4k, clean white background, professional lighting.`;
-      
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: {
-          parts: [
-            {
-              text: prompt,
-            },
-          ],
-        },
-        config: {
-          imageConfig: {
-            aspectRatio: "1:1"
-          }
-        },
+
+      const res = await fetch('/api/ai/product-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          category,
+          supplierName: supplierNameText,
+        }),
       });
-      
-      let generatedImageUrl = '';
-      if (response.candidates && response.candidates[0]?.content?.parts) {
-        for (const part of response.candidates[0].content.parts) {
-          if (part.inlineData && part.inlineData.mimeType && part.inlineData.data) {
-            generatedImageUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-            break;
-          }
-        }
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || 'Failed to generate image');
       }
+
+      const data = await res.json();
+      const generatedImageUrl = data.imageUrl;
       
       if (generatedImageUrl) {
         try {
-          const res = await fetch(generatedImageUrl);
-          const blob = await res.blob();
+          const resBlob = await fetch(generatedImageUrl);
+          const blob = await resBlob.blob();
           const file = new File([blob], "generated_product.jpg", { type: blob.type || "image/jpeg" });
           setImageFile(file);
           setImageUrl('');
@@ -527,9 +532,9 @@ export function Inventory() {
       } else {
         toast.error('Failed to generate image. Try again.');
       }
-    } catch (err) {
-      toast.error('Failed to generate image. Ensure API key supports image generation.');
-      console.error('Gemini error:', err);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to generate image.');
+      console.error('AI image error:', err);
     } finally {
       setIsGeneratingImage(false);
     }
@@ -668,8 +673,9 @@ export function Inventory() {
         });
       }
 
-    } catch (error) {
-      handleFirestoreError(error, editingProduct ? OperationType.UPDATE : OperationType.CREATE, 'products');
+    } catch (error: any) {
+      console.error('Product save error:', error);
+      toast.error(error.message || 'Failed to save product');
     } finally {
       setIsSubmitting(false);
     }
@@ -693,8 +699,9 @@ export function Inventory() {
       toast.success('Product deleted successfully');
       setIsDeleteDialogOpen(false);
       setProductToDelete(null);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, 'products');
+    } catch (error: any) {
+      console.error('Delete product error:', error);
+      toast.error(error.message || 'Failed to delete product');
     }
   };
 
@@ -800,19 +807,24 @@ export function Inventory() {
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="bg-[#141210] border border-[#3A3230] p-1 mb-6">
-          <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Products</TabsTrigger>
-          <TabsTrigger value="suppliers" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Suppliers</TabsTrigger>
-          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-black text-[#7A736E] data-[state=inactive]:hover:text-[#FAF7F2]">Supplier Orders</TabsTrigger>
+        <TabsList className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] p-1 mb-6 rounded-xl">
+          <TabsTrigger value="products" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-[#0A0C10] text-[#8E857E] data-[state=inactive]:hover:text-[#FAF7F2] rounded-lg">Products</TabsTrigger>
+          <TabsTrigger value="suppliers" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-[#0A0C10] text-[#8E857E] data-[state=inactive]:hover:text-[#FAF7F2] rounded-lg">Suppliers</TabsTrigger>
+          <TabsTrigger value="purchase_orders" className="font-mono text-xs uppercase data-[state=active]:bg-[#FF6F00] data-[state=active]:text-[#0A0C10] text-[#8E857E] data-[state=inactive]:hover:text-[#FAF7F2] rounded-lg">Supplier Orders</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="space-y-6">
           <div className="flex justify-between items-center flex-wrap gap-4">
              <div className="flex items-center gap-2 flex-wrap ml-auto">
           {selectedProductIds.length > 0 && (
-            <Button onClick={() => handlePrintBatchQR()} variant="outline" className="border-[#1D9E75] text-[#1D9E75] hover:bg-[#1D9E75] hover:text-white font-mono text-xs">
-              <Printer className="mr-2 h-4 w-4" /> Print Batch ({selectedProductIds.length})
-            </Button>
+            <>
+              <Button onClick={() => handlePrintBatchQR()} variant="outline" className="border-[#1D9E75] text-[#1D9E75] hover:bg-[#1D9E75] hover:text-white font-mono text-xs">
+                <Printer className="mr-2 h-4 w-4" /> Print Batch QR ({selectedProductIds.length})
+              </Button>
+              <Button onClick={() => handlePrintBatchBarcode()} variant="outline" className="border-[#1D9E75] text-[#1D9E75] hover:bg-[#1D9E75] hover:text-white font-mono text-xs">
+                <Printer className="mr-2 h-4 w-4" /> Print Batch Barcode ({selectedProductIds.length})
+              </Button>
+            </>
           )}
           <Button onClick={handleDownloadCSV} variant="outline" className="border-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2] font-mono text-xs">
             <Download className="mr-2 h-4 w-4" /> Export CSV
@@ -826,9 +838,9 @@ export function Inventory() {
             <DialogTrigger render={<Button className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold" />}>
               <Plus className="mr-2 h-4 w-4" /> Add Product
             </DialogTrigger>
-            <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[425px]">
+            <DialogContent className="glass-modal border border-white/[0.12] text-[#FAF7F2] sm:max-w-[425px] rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.7)]">
               <DialogHeader>
-                <DialogTitle>{editingProduct ? 'Edit Product' : 'New Product'}</DialogTitle>
+                <DialogTitle className="font-mono text-sm uppercase tracking-wider text-[#FF6F00]">{editingProduct ? 'Edit Product' : 'New Product'}</DialogTitle>
               </DialogHeader>
 
               <div className={`relative rounded-md overflow-hidden bg-black aspect-video border border-[#FF6F00] ${isScanning ? 'block' : 'hidden'}`}>
@@ -1105,64 +1117,64 @@ export function Inventory() {
       )}
 
       <div className="flex gap-4">
-        <div className="flex bg-[#0A0C10] border border-[#3A3230] p-1 items-center w-full max-w-md h-12">
-          <div className="px-3 text-[#7A736E]">
+        <div className="flex bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] p-1 items-center w-full max-w-md h-12 rounded-xl focus-within:border-[#FF6F00] transition-colors shadow-sm">
+          <div className="px-3 text-[#8E857E]">
             <Search className="h-5 w-5" />
           </div>
           <input 
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="SEARCH PRODUCTS..." 
-            className="bg-transparent w-full text-sm outline-none font-mono placeholder-[#3A3230] text-[#FAF7F2]"
+            placeholder="Search products by name or barcode..." 
+            className="bg-transparent w-full text-xs sm:text-sm outline-none font-mono placeholder-[#8E857E] text-[#FAF7F2]"
           />
         </div>
         <select
           value={selectedCategory}
           onChange={(e) => setSelectedCategory(e.target.value)}
-          className="bg-[#0A0C10] border border-[#3A3230] h-12 px-3 text-[#FAF7F2] font-mono text-sm min-w-[150px] outline-none rounded-md focus:ring-1 focus:ring-[#FF6F00]"
+          className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] h-12 px-3 text-[#FAF7F2] font-mono text-xs sm:text-sm min-w-[150px] outline-none rounded-xl focus:border-[#FF6F00] shadow-sm appearance-none cursor-pointer"
         >
-          <option value="All">ALL CATEGORIES</option>
+          <option value="All" className="bg-[#141210] text-[#FAF7F2]">All Categories</option>
           {categories.map((c) => (
-            <option key={c} value={c}>{c.toUpperCase()}</option>
+            <option key={c} value={c} className="bg-[#141210] text-[#FAF7F2]">{c}</option>
           ))}
         </select>
         <select
           value={stockFilter}
           onChange={(e) => setStockFilter(e.target.value)}
-          className="bg-[#0A0C10] border border-[#3A3230] h-12 px-3 text-[#FAF7F2] font-mono text-sm min-w-[150px] outline-none rounded-md focus:ring-1 focus:ring-[#FF6F00]"
+          className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] h-12 px-3 text-[#FAF7F2] font-mono text-xs sm:text-sm min-w-[150px] outline-none rounded-xl focus:border-[#FF6F00] shadow-sm appearance-none cursor-pointer"
         >
-          <option value="All">ALL STOCK</option>
-          <option value="LowStock">LOW STOCK</option>
-          <option value="OutOfStock">OUT OF STOCK</option>
+          <option value="All" className="bg-[#141210] text-[#FAF7F2]">All Stock Status</option>
+          <option value="LowStock" className="bg-[#141210] text-[#FAF7F2]">Low Stock Alert</option>
+          <option value="OutOfStock" className="bg-[#141210] text-[#FAF7F2]">Out of Stock</option>
         </select>
       </div>
 
-      <div className="border border-[#3A3230] bg-[#0A0C10] flex-1 overflow-hidden flex flex-col">
+      <div className="glass-panel rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex-1 overflow-hidden flex flex-col">
         <div className="overflow-x-auto flex-1">
           <Table>
-            <TableHeader className="bg-[#1A1614]">
-              <TableRow className="border-[#3A3230] hover:bg-transparent">
+            <TableHeader className="bg-white/[0.03]">
+              <TableRow className="border-b border-white/[0.08] hover:bg-transparent">
                 <TableHead className="w-[40px] px-4">
                   <input
                     type="checkbox"
-                    className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
+                    className="rounded border-white/[0.2] bg-white/[0.05] text-[#1D9E75] focus:ring-[#1D9E75]"
                     checked={selectedProductIds.length === filteredProducts.length && filteredProducts.length > 0}
                     onChange={handleToggleSelectAll}
                   />
                 </TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[100px]">BARCODE</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[60px]">IMAGE</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[150px]">PRODUCT NAME</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">CATEGORY</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider text-right">PRICE</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider text-right">STOCK</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider w-[100px]">BARCODE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider w-[60px]">IMAGE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider min-w-[150px]">PRODUCT NAME</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider">CATEGORY</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider text-right">PRICE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider text-right">STOCK</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="text-sm font-mono">
               {filteredProducts.map((product) => (
                 <TableRow 
                   key={product.id} 
-                  className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors cursor-pointer"
+                  className="border-b border-white/[0.05] hover:bg-white/[0.035] transition-colors cursor-pointer"
                   onClick={() => {
                     setSelectedProduct(product);
                     setIsDetailsDialogOpen(true);
@@ -1171,30 +1183,30 @@ export function Inventory() {
                   <TableCell className="w-[40px] px-4" onClick={(e) => e.stopPropagation()}>
                     <input
                       type="checkbox"
-                      className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
+                      className="rounded border-white/[0.2] bg-white/[0.05] text-[#1D9E75] focus:ring-[#1D9E75]"
                       checked={selectedProductIds.includes(product.id)}
                       onChange={(e) => handleToggleSelect(product.id, e as any)}
                     />
                   </TableCell>
-                  <TableCell className="text-[#7A736E] whitespace-nowrap">{product.barcode}</TableCell>
+                  <TableCell className="text-[#8E857E] whitespace-nowrap font-mono tabular-nums">{product.barcode}</TableCell>
                   <TableCell>
                     {product.imageUrl ? (
-                      <div className="w-8 h-8 rounded shrink-0 overflow-hidden bg-[#0A0C10] border border-[#3A3230]">
+                      <div className="w-8 h-8 rounded-lg shrink-0 overflow-hidden bg-black/40 border border-white/[0.1]">
                         <img src={product.imageUrl} alt={product.name} className="w-full h-full object-cover" />
                       </div>
                     ) : (
-                      <div className="w-8 h-8 rounded shrink-0 bg-[#0A0C10] border border-[#3A3230] flex items-center justify-center text-[#3A3230]">
+                      <div className="w-8 h-8 rounded-lg shrink-0 bg-white/[0.03] border border-white/[0.08] flex items-center justify-center text-[#8E857E]">
                         <Camera className="w-4 h-4" />
                       </div>
                     )}
                   </TableCell>
-                  <TableCell className="text-[#FAF7F2] font-sans whitespace-nowrap">{product.name}</TableCell>
+                  <TableCell className="text-[#FAF7F2] font-sans font-medium whitespace-nowrap">{product.name}</TableCell>
                   <TableCell>
-                    <span className="text-[#7A736E] whitespace-nowrap">
+                    <span className="text-[#8E857E] whitespace-nowrap">
                       {product.category}
                     </span>
                   </TableCell>
-                  <TableCell className="text-right text-[#1D9E75] whitespace-nowrap">₱{formatCurrency(product.price)}</TableCell>
+                  <TableCell className="text-right text-[#1D9E75] font-mono tabular-nums font-bold whitespace-nowrap">₱{formatCurrency(product.price)}</TableCell>
                   <TableCell className="text-right whitespace-nowrap">
                     <div className="flex items-center justify-end gap-2">
                       {product.stock <= product.minStock && product.stock > 0 && (
@@ -1203,12 +1215,12 @@ export function Inventory() {
                       {product.stock === 0 && (
                         <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" title="Out of Stock"></span>
                       )}
-                      <span className="text-[#FAF7F2]">{product.stock}</span>
+                      <span className="text-[#FAF7F2] font-mono tabular-nums">{product.stock}</span>
                       {product.stock <= product.minStock && (
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="h-6 px-2 text-[10px] text-[#FF6F00] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10 border border-[#FF6F00]/30 ml-2 uppercase tracking-widest font-mono"
+                          className="h-6 px-2 text-[10px] text-[#FF6F00] hover:text-[#FF6F00] hover:bg-[#FF6F00]/10 border border-[#FF6F00]/30 ml-2 uppercase tracking-widest font-mono rounded-md"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleReorderProduct(product, product.minStock * 2 || 10);
@@ -1222,9 +1234,9 @@ export function Inventory() {
                 </TableRow>
               ))}
               {filteredProducts.length === 0 && (
-               <TableRow className="border-[#3A3230] bg-[#141210]">
-                 <TableCell colSpan={7} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
-                    NO PRODUCTS FOUND
+               <TableRow className="border-b border-white/[0.06] bg-transparent">
+                 <TableCell colSpan={7} className="h-24 text-center font-mono text-[#8E857E] uppercase tracking-wider text-xs">
+                    No products found matching criteria
                  </TableCell>
                </TableRow>
               )}
@@ -1234,7 +1246,7 @@ export function Inventory() {
       </div>
 
       <Dialog open={isDetailsDialogOpen} onOpenChange={setIsDetailsDialogOpen}>
-        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[500px]">
+        <DialogContent className="glass-modal border border-white/[0.12] text-[#FAF7F2] sm:max-w-[500px] rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.7)]">
           <DialogHeader>
             <DialogTitle className="text-[#FF6F00] uppercase tracking-widest flex justify-between items-center pr-6">
               Product Details
@@ -1255,6 +1267,21 @@ export function Inventory() {
                       title="Generate QR Code"
                     >
                       <QrCode className="h-4 w-4" />
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 text-[#7A736E] hover:text-[#1D9E75] hover:bg-[#1D9E75]/10"
+                      onClick={() => {
+                        setIsDetailsDialogOpen(false);
+                        if (selectedProduct) {
+                          setQrProduct(selectedProduct);
+                          setIsBarcodeDialogOpen(true);
+                        }
+                      }}
+                      title="Generate Barcode"
+                    >
+                      <BarcodeIcon className="h-4 w-4" />
                     </Button>
                     <Button 
                       variant="ghost" 
@@ -1438,6 +1465,69 @@ export function Inventory() {
         </DialogContent>
       </Dialog>
 
+      {/* Barcode Dialog */}
+      <Dialog open={isBarcodeDialogOpen} onOpenChange={setIsBarcodeDialogOpen}>
+        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="text-[#FF6F00] flex items-center gap-2">
+              <BarcodeIcon className="h-5 w-5" /> Product Barcode
+            </DialogTitle>
+          </DialogHeader>
+          {qrProduct && (
+            <div className="flex flex-col items-center justify-center py-6 gap-6">
+              <div 
+                id="print-barcode-section" 
+                ref={barcodePrintRef}
+                className="bg-white p-6 rounded-xl shadow-lg flex flex-col items-center gap-4 w-full"
+              >
+                <div className="text-center w-full">
+                  <h3 className="text-black font-sans font-bold text-lg leading-tight truncate px-2 w-full mx-auto">
+                    {qrProduct.name}
+                  </h3>
+                  <p className="text-gray-500 font-mono text-xs mt-1">
+                    {qrProduct.category}
+                  </p>
+                </div>
+                <div className="w-full flex justify-center">
+                  <BarcodeComponent 
+                    value={qrProduct.barcode} 
+                    width={1.5}
+                    height={50}
+                    fontSize={14}
+                    background="#ffffff"
+                    lineColor="#000000"
+                    margin={0}
+                  />
+                </div>
+                <div className="text-center w-full mt-2">
+                  <p className="text-gray-600 font-sans text-sm font-semibold">
+                    ₱{formatCurrency(qrProduct.price)}
+                  </p>
+                </div>
+              </div>
+              <p className="font-mono text-xs text-[#7A736E] text-center max-w-[280px]">
+                Print this barcode and attach it to the physical product to quickly scan it at the POS.
+              </p>
+          </div>
+          )}
+          <div className="flex flex-col sm:flex-row justify-end gap-3 mt-4">
+            <Button 
+              variant="ghost" 
+              onClick={() => setIsBarcodeDialogOpen(false)}
+              className="text-[#FAF7F2] hover:bg-[#1A1614] font-mono text-xs uppercase tracking-widest sm:flex-1"
+            >
+              Close
+            </Button>
+            <Button 
+              onClick={() => handlePrintBarcode()}
+              className="bg-[#1D9E75] hover:bg-[#147a5b] text-white font-mono text-xs uppercase tracking-widest sm:flex-1"
+            >
+              <Printer className="h-4 w-4 mr-2" /> Print Barcode
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Batch QR Code Hidden Print Container */}
       <div className="fixed overflow-hidden h-0 w-0" style={{ left: '-10000px', top: '-10000px' }}>
         <div 
@@ -1497,6 +1587,68 @@ export function Inventory() {
           </div>
         </div>
       </div>
+
+      {/* Batch Barcode Hidden Print Container */}
+      <div className="fixed overflow-hidden h-0 w-0" style={{ left: '-10000px', top: '-10000px' }}>
+        <div 
+          ref={batchBarcodePrintRef}
+          className="bg-white p-8 w-[210mm]"
+        >
+          <style type="text/css" media="print">
+            {`
+              @page { size: A4 portrait; margin: 10mm; }
+              body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+              .sticker-grid {
+                display: grid !important;
+                grid-template-columns: repeat(3, 1fr) !important;
+                gap: 10mm !important;
+              }
+              .sticker-item {
+                page-break-inside: avoid;
+                border: 1px dashed #cccccc;
+                padding: 10px;
+                text-align: center;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100%;
+              }
+            `}
+          </style>
+          <h2 className="text-black text-center font-bold text-xl mb-6">Batch Product Barcodes</h2>
+          <div className="sticker-grid grid grid-cols-3 gap-4">
+            {products.filter(p => selectedProductIds.includes(p.id)).map(product => (
+              <div key={`print-barcode-${product.id}`} className="sticker-item border border-dashed border-gray-300 rounded-lg p-4 flex flex-col items-center">
+                <div className="text-center w-full mb-2">
+                  <h3 className="text-black font-sans font-bold text-sm leading-tight truncate px-1 w-full">
+                    {product.name}
+                  </h3>
+                  <p className="text-gray-500 font-mono text-[10px] mt-1">
+                    {product.category}
+                  </p>
+                </div>
+                <div className="w-full flex justify-center scale-90 origin-center">
+                  <BarcodeComponent 
+                    value={product.barcode} 
+                    width={1.2}
+                    height={40}
+                    fontSize={12}
+                    background="#ffffff"
+                    lineColor="#000000"
+                    margin={0}
+                  />
+                </div>
+                <div className="text-center w-full mt-2">
+                  <p className="text-gray-600 font-sans text-xs font-semibold">
+                    ₱{formatCurrency(product.price)}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
         </TabsContent>
         <TabsContent value="suppliers" className="space-y-6">
           <div className="flex justify-between items-center flex-wrap gap-4">
@@ -1541,7 +1693,7 @@ export function Inventory() {
                          />
                        </div>
                        <div className="flex justify-end gap-2 pt-4">
-                         <Button type="button" variant="outline" onClick={closeSupplierDialog} className="border-[#3A3230] text-[#000000]">Cancel</Button>
+                         <Button type="button" variant="outline" onClick={closeSupplierDialog} className="border-[#3A3230] text-[#FAF7F2] hover:bg-[#1A1614]">Cancel</Button>
                          <Button type="submit" disabled={isSubmitting} className="bg-[#FF6F00] text-black hover:bg-[#FF6F00]/80">
                            {isSubmitting ? 'Saving...' : 'Save'}
                          </Button>

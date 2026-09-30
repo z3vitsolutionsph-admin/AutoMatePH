@@ -2,10 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Terminal, X, Send, Maximize2, Minimize2, AlertCircle } from 'lucide-react';
 import { Card } from './ui/card';
-import { GoogleGenAI } from '@google/genai';
 import { formatCurrency } from '../lib/utils';
-import { db } from '../lib/firebase';
-import { collection, getDocs, limit, query, orderBy } from 'firebase/firestore';
+import { db, auth, collection, getDocs, limit, query, orderBy, where } from '../lib/realtime';
 import Markdown from 'react-markdown';
 
 interface Message {
@@ -71,8 +69,18 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
 
     try {
       // Fetch recent transactions
-      const qTrans = query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(100));
-      const syncTrans = await getDocs(qTrans);
+      let syncTrans;
+      try {
+        const qTrans = query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(100));
+        syncTrans = await getDocs(qTrans);
+      } catch {
+        if (auth.currentUser?.uid) {
+          const qTransCashier = query(collection(db, 'transactions'), where('cashierId', '==', auth.currentUser.uid), limit(100));
+          syncTrans = await getDocs(qTransCashier);
+        } else {
+          syncTrans = { size: 0, forEach: () => {} } as any;
+        }
+      }
       
       let totalRevenue = 0;
       let recentSalesCount = 0;
@@ -161,15 +169,7 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
     setInput('');
     setIsTyping(true);
 
-    if (!process.env.GEMINI_API_KEY) {
-      setMessages(prev => [...prev, { role: 'error', text: '[ERROR: GEMINI_API_KEY NOT CONFIGURED IN ENVIRONMENT]' }]);
-      setIsTyping(false);
-      return;
-    }
-
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      
       const context = await Promise.race([
         fetchContext(),
         new Promise<string>((_, reject) => setTimeout(() => reject(new Error("Context fetch timeout")), 8000))
@@ -179,31 +179,25 @@ export function TerminalChat({ isOpen, onClose }: { isOpen: boolean; onClose: ()
       });
       
       const historyStr = messages.slice(-10).map(m => `${m.role === 'user' ? 'Operator' : 'AI'}: ${m.text}`).join('\n');
-      
-      const prompt = `You are an advanced AI Analytics Engine for "AutoMatePH", a POS and Inventory system.
-You analyze real-time data to provide forecasts, operational insights, and answer queries.
-Be concise, analytical, and industrial. Use Markdown for formatting. Prefer bullet points for lists.
+      const prompt = `Chat History:\n${historyStr}\nOperator: ${userMsg}\nAI:`;
 
-${context}
-
-Chat History:
-${historyStr}
-Operator: ${userMsg}
-AI:`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          temperature: 0.2, // low temp for analytical consistency
-        }
+      const res = await fetch('/api/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, context }),
       });
 
-      setMessages(prev => [...prev, { role: 'model', text: response.text || 'No response.' }]);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to reach AI service');
+      }
+
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'model', text: data.reply || 'No response.' }]);
     } catch (err: any) {
       console.error("AI Insights Error:", err);
-      const errMsg = err.message || 'FAILED TO CONNECT TO CORE INTELLIGENCE';
-      setMessages(prev => [...prev, { role: 'error', text: `[SYSTEM DIAGNOSTIC] ${errMsg}` }]);
+      const errMsg = err.message || 'Unable to connect to AI intelligence';
+      setMessages(prev => [...prev, { role: 'error', text: errMsg }]);
     } finally {
       setIsTyping(false);
       setTimeout(() => inputRef.current?.focus(), 100);
@@ -223,62 +217,64 @@ AI:`;
            className={`fixed z-50 flex flex-col transition-all duration-300 ease-in-out ${
              isExpanded 
                ? 'inset-0 sm:inset-4 md:inset-8 lg:inset-12' 
-               : 'inset-0 sm:inset-auto sm:bottom-6 sm:right-6 sm:w-[400px] md:w-[450px] sm:h-[500px] md:h-[600px]'
+               : 'inset-0 sm:inset-auto sm:bottom-6 sm:right-6 sm:w-[420px] md:w-[460px] sm:h-[520px] md:h-[620px]'
            }`}
         >
-          <Card className={`flex-1 bg-[#141210] border-[#FF6F00]/50 shadow-[0_0_30px_rgba(255,111,0,0.15)] flex flex-col overflow-hidden relative font-mono ${isExpanded ? 'rounded-none sm:rounded-xl' : 'rounded-none sm:rounded-xl'}`}>
+          <div className={`flex-1 bg-[#141210]/90 backdrop-blur-2xl border border-white/[0.12] shadow-[0_24px_64px_rgba(0,0,0,0.7),inset_0_1px_1px_rgba(255,255,255,0.15)] flex flex-col overflow-hidden relative font-sans ${isExpanded ? 'rounded-none sm:rounded-2xl' : 'rounded-none sm:rounded-2xl'}`}>
              {/* Header */}
-             <div className="h-12 bg-gradient-to-r from-[#FF6F00] to-[#E65100] text-black flex items-center justify-between px-4 shrink-0 shadow-sm">
-               <div className="flex items-center gap-2 font-bold text-sm tracking-widest uppercase">
-                 <Terminal className="h-5 w-5" />
-                 AI_Assistant
+             <div className="h-13 bg-white/[0.03] border-b border-white/[0.08] backdrop-blur-md text-[#FAF7F2] flex items-center justify-between px-4 shrink-0">
+               <div className="flex items-center gap-2.5 font-bold font-mono text-xs tracking-wider uppercase text-[#1D9E75]">
+                 <div className="p-1 rounded-md bg-[#1D9E75]/15 border border-[#1D9E75]/30">
+                   <Terminal className="h-4 w-4 text-[#1D9E75]" />
+                 </div>
+                 <span>Foresight AI Store Intelligence</span>
                </div>
                <div className="flex items-center gap-1">
-                 <button onClick={toggleExpand} className="hover:bg-black/20 p-1.5 rounded transition-colors hidden sm:block" title={isExpanded ? "Restore" : "Maximize"}>
+                 <button onClick={toggleExpand} className="hover:bg-white/[0.08] text-[#8E857E] hover:text-[#FAF7F2] p-1.5 rounded-lg transition-colors hidden sm:block" title={isExpanded ? "Restore" : "Maximize"}>
                    {isExpanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
                  </button>
-                 <button onClick={onClose} className="hover:bg-black/20 p-1.5 rounded transition-colors" title="Close">
+                 <button onClick={onClose} className="hover:bg-white/[0.08] text-[#8E857E] hover:text-[#FAF7F2] p-1.5 rounded-lg transition-colors" title="Close">
                    <X className="h-5 w-5" />
                  </button>
                </div>
              </div>
 
              {/* Messages */}
-             <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 custom-scrollbar bg-[#0A0C10] text-[#FAF7F2] text-sm leading-relaxed">
+             <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4 custom-scrollbar bg-transparent text-[#FAF7F2] text-sm leading-relaxed">
                {messages.map((msg, idx) => (
                  <div key={idx} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                   <div className={`text-[10px] tracking-widest uppercase mb-1.5 opacity-70 flex items-center gap-1 ${
-                     msg.role === 'user' ? 'text-[#1D9E75]' : msg.role === 'error' ? 'text-red-500' : 'text-[#FF6F00]'
+                   <div className={`text-[10px] font-mono tracking-wider uppercase mb-1 opacity-70 flex items-center gap-1 ${
+                     msg.role === 'user' ? 'text-[#1D9E75]' : msg.role === 'error' ? 'text-red-400' : 'text-[#FF6F00]'
                    }`}>
-                     {msg.role === 'user' ? 'OPERATOR' : msg.role === 'error' ? 'SYS_ERROR' : 'SYS_AI'}
+                     {msg.role === 'user' ? 'You' : msg.role === 'error' ? 'System Notification' : 'Foresight AI'}
                      {msg.role === 'error' && <AlertCircle className="h-3 w-3" />}
                    </div>
-                   <div className={`p-4 border rounded-lg shadow-sm ${
+                   <div className={`p-3.5 border rounded-xl shadow-sm ${
                      msg.role === 'user' 
-                       ? 'bg-[#1D9E75]/10 border-[#1D9E75]/30 text-[#FAF7F2] rounded-tr-sm' 
+                       ? 'bg-[#1D9E75]/15 border-[#1D9E75]/35 text-[#FAF7F2] rounded-tr-sm backdrop-blur-md' 
                        : msg.role === 'error'
-                       ? 'bg-red-500/10 border-red-500/30 text-red-400 rounded-tl-sm'
-                       : 'bg-[#1A1614] border-[#3A3230] text-[#E8E6E3] rounded-tl-sm'
-                   } max-w-[90%] md:max-w-[85%] break-words whitespace-pre-wrap`}>
+                       ? 'bg-red-500/10 border-red-500/30 text-red-300 rounded-tl-sm backdrop-blur-md' 
+                       : 'bg-white/[0.04] border-white/[0.08] text-[#FAF7F2] rounded-tl-sm backdrop-blur-md'
+                   } max-w-[90%] md:max-w-[85%] break-words whitespace-pre-wrap font-sans`}>
                      {msg.role === 'model' || msg.role === 'error' ? (
                        <div className="markdown-body text-xs md:text-sm">
                          <Markdown
                            components={{
-                             ul: ({node, ...props}) => <ul className="list-disc pl-4 space-y-1 mb-4 last:mb-0" {...props} />,
-                             ol: ({node, ...props}) => <ol className="list-decimal pl-4 space-y-1 mb-4 last:mb-0" {...props} />,
+                             ul: ({node, ...props}) => <ul className="list-disc pl-4 space-y-1 mb-3 last:mb-0" {...props} />,
+                             ol: ({node, ...props}) => <ol className="list-decimal pl-4 space-y-1 mb-3 last:mb-0" {...props} />,
                              li: ({node, ...props}) => <li className="pl-1" {...props} />,
-                             p: ({node, ...props}) => <p className="mb-4 last:mb-0 leading-relaxed" {...props} />,
+                             p: ({node, ...props}) => <p className="mb-3 last:mb-0 leading-relaxed" {...props} />,
                              strong: ({node, ...props}) => <strong className="font-bold text-[#FF6F00]" {...props} />,
                              em: ({node, ...props}) => <em className="italic text-[#1D9E75]" {...props} />,
                              code: ({node, inline, className, children, ...props}: any) => {
                                return !inline ? (
-                                 <div className="bg-black/50 border border-[#3A3230] rounded-md p-3 my-4 overflow-x-auto">
+                                 <div className="bg-black/60 border border-white/[0.1] rounded-lg p-3 my-3 overflow-x-auto font-mono text-xs">
                                    <code className={className} {...props}>
                                      {children}
                                    </code>
                                  </div>
                                ) : (
-                                 <code className="bg-black/40 text-[#FF6F00] px-1.5 py-0.5 rounded font-mono text-xs" {...props}>
+                                 <code className="bg-white/[0.08] text-[#FF6F00] px-1.5 py-0.5 rounded font-mono text-xs" {...props}>
                                    {children}
                                  </code>
                                )
@@ -296,9 +292,9 @@ AI:`;
                ))}
                {isTyping && (
                  <div className="flex flex-col items-start">
-                   <div className="text-[10px] tracking-widest uppercase mb-1.5 opacity-70 text-[#FF6F00]">SYS_AI</div>
-                   <div className="p-4 border rounded-lg rounded-tl-sm bg-[#1A1614] border-[#3A3230] text-[#FF6F00] flex items-center gap-3 text-xs md:text-sm">
-                     <span className="animate-pulse">[ PROCESSING REQUEST ]</span>
+                   <div className="text-[10px] font-mono tracking-wider uppercase mb-1 opacity-70 text-[#FF6F00]">Foresight AI</div>
+                   <div className="p-3.5 border rounded-xl rounded-tl-sm bg-white/[0.04] border-white/[0.08] text-[#FF6F00] flex items-center gap-3 text-xs backdrop-blur-md">
+                     <span className="font-mono">Analyzing telemetry...</span>
                      <span className="flex gap-1">
                        <span className="w-1.5 h-1.5 rounded-full bg-[#FF6F00] animate-bounce" style={{ animationDelay: '0ms' }} />
                        <span className="w-1.5 h-1.5 rounded-full bg-[#FF6F00] animate-bounce" style={{ animationDelay: '150ms' }} />
@@ -311,15 +307,13 @@ AI:`;
              </div>
 
              {/* Input */}
-             <form onSubmit={handleSend} className="h-14 md:h-16 border-t border-[#3A3230] bg-[#141210] flex items-center px-2">
-               <div className="px-3 text-[#FF6F00] hidden sm:block">Admin@Sys:~$</div>
-               <div className="px-3 text-[#FF6F00] sm:hidden">~$</div>
+             <form onSubmit={handleSend} className="h-14 border-t border-white/[0.08] bg-white/[0.02] backdrop-blur-md flex items-center px-3 gap-2">
                <input
                  ref={inputRef}
                  value={input}
                  onChange={e => setInput(e.target.value)}
-                 placeholder="Enter command or query..."
-                 className="flex-1 bg-transparent border-none outline-none text-[#FAF7F2] placeholder-[#7A736E] text-sm focus:ring-0 h-full px-2"
+                 placeholder="Ask about sales, stockouts, or inventory forecasts..."
+                 className="flex-1 bg-transparent border-none outline-none text-[#FAF7F2] placeholder-[#8E857E] text-xs font-sans h-full px-2"
                  autoFocus
                  disabled={isTyping}
                  maxLength={500}
@@ -327,12 +321,13 @@ AI:`;
                <button 
                  type="submit" 
                  disabled={!input.trim() || isTyping}
-                 className="h-10 w-10 flex items-center justify-center rounded-md bg-[#FF6F00]/10 text-[#FF6F00] hover:bg-[#FF6F00] hover:text-black disabled:opacity-30 disabled:hover:bg-[#FF6F00]/10 disabled:hover:text-[#FF6F00] transition-colors mx-2 shrink-0"
+                 className="h-9 px-3 flex items-center justify-center gap-1.5 rounded-lg bg-[#FF6F00] hover:bg-[#FF6F00]/90 text-[#0A0C10] font-bold font-mono text-xs uppercase disabled:opacity-30 transition-all shadow-[0_0_15px_rgba(255,111,0,0.25)] shrink-0"
                >
-                 <Send className="h-4 w-4" />
+                 <span>Send</span>
+                 <Send className="h-3.5 w-3.5" />
                </button>
              </form>
-          </Card>
+          </div>
         </motion.div>
       )}
     </AnimatePresence>

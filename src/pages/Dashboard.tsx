@@ -1,19 +1,17 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { db } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { db, collection, onSnapshot, query, orderBy, limit, writeBatch, doc, getDocs } from '../lib/realtime';
 import { formatCurrency } from '../lib/utils';
 import { PackageSearch, TrendingUp, AlertTriangle, Activity, PieChart as PieChartIcon } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Sector } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { RevenueTrendsChart } from '../components/RevenueTrendsChart';
 
 // ui components
 import { Button } from '../components/ui/button';
 import { toast } from 'sonner';
 import { Loader2, Trash2 } from 'lucide-react';
-import { writeBatch, doc, getDocs } from 'firebase/firestore';
 
 
 interface Stats {
@@ -88,6 +86,9 @@ export function Dashboard() {
   const [activeIndex, setActiveIndex] = useState(0);
   const { role } = useAuth();
   const navigate = useNavigate();
+
+  const isInitialLoad = useRef(true);
+  const prevProductsRef = useRef(new Map<string, any>());
 
   const forecastData = useMemo(() => {
     if (products.length === 0 || transactions.length === 0) return null;
@@ -176,17 +177,43 @@ export function Dashboard() {
       let inventoryValueCost = 0;
       let inventoryValueRetail = 0;
       const prods: any[] = [];
+
+      if (!isInitialLoad.current) {
+        snapshot.docChanges().forEach(change => {
+          if (change.type === 'modified') {
+            const data = change.doc.data();
+            const id = change.doc.id;
+            const prevData = prevProductsRef.current.get(id);
+            const minStock = data.minStock || 0;
+            
+            if (data.stock <= minStock && prevData && prevData.stock > minStock) {
+              toast.error(`Low Stock Alert: ${data.name}`, {
+                description: `Current stock dropped to ${data.stock} (Min: ${minStock})`,
+                action: {
+                  label: 'Reorder Now',
+                  onClick: () => navigate('/inventory', { state: { createPO: true, productId: id, qty: minStock * 2 || 10 } })
+                },
+                duration: 10000,
+              });
+            }
+          }
+        });
+      }
+
       snapshot.forEach((doc) => {
         totalProducts++;
         const data = doc.data();
         prods.push({ id: doc.id, ...data });
+        prevProductsRef.current.set(doc.id, data);
         if (data.stock <= (data.minStock || 0)) lowStockItems++;
         inventoryValueCost += (data.stock || 0) * (data.cost || 0);
         inventoryValueRetail += (data.stock || 0) * (data.price || 0);
       });
+
+      isInitialLoad.current = false;
       setStats(s => ({ ...s, totalProducts, lowStockItems, inventoryValueCost, inventoryValueRetail }));
       setProducts(prods);
-    }, (e) => handleFirestoreError(e, OperationType.GET, 'products'));
+    }, (e) => console.error('Error fetching products:', e));
 
     const unsubTransactions = onSnapshot(query(collection(db, 'transactions'), orderBy('createdAt', 'desc'), limit(200)), (snapshot) => {
       let totalSales = 0;
@@ -251,7 +278,7 @@ export function Dashboard() {
     }, (e) => {
       setSalesError("Unable to load performance data.");
       setIsLoadingSales(false);
-      handleFirestoreError(e, OperationType.GET, 'transactions');
+      console.error('Transactions load error:', e);
     });
 
     return () => {
@@ -271,159 +298,137 @@ export function Dashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         <div className="flex flex-col gap-4 lg:col-span-1">
-          <Card className="bg-[#141210] border-[#3A3230]">
+          <Card className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.25)] hover:border-white/[0.16] transition-all rounded-xl">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-mono font-medium text-[#7A736E]">
+              <CardTitle className="text-xs font-mono font-medium text-[#8E857E] uppercase tracking-wider">
                 SESSION REVENUE
               </CardTitle>
-              <TrendingUp className="h-4 w-4 text-[#1D9E75]" />
+              <div className="p-1.5 rounded-lg bg-[#1D9E75]/15 border border-[#1D9E75]/30">
+                <TrendingUp className="h-4 w-4 text-[#1D9E75]" />
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-[#FAF7F2]">₱{formatCurrency(stats.totalSales)}</div>
-              <p className="text-xs font-mono text-[#7A736E] mt-1">+12% vs last shift</p>
+              <div className="text-3xl font-bold font-mono text-[#FAF7F2]">₱{formatCurrency(stats.totalSales)}</div>
+              <p className="text-xs font-mono text-[#1D9E75] mt-1">+12% vs last shift</p>
             </CardContent>
           </Card>
           
-          <Card className="bg-[#141210] border-[#3A3230]">
+          <Card className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.25)] hover:border-white/[0.16] transition-all rounded-xl">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-mono font-medium text-[#7A736E]">
-                TRANSACTIONS (LAST 50)
+              <CardTitle className="text-xs font-mono font-medium text-[#8E857E] uppercase tracking-wider">
+                TRANSACTIONS (LATEST)
               </CardTitle>
-              <Activity className="h-4 w-4 text-[#FF6F00]" />
+              <div className="p-1.5 rounded-lg bg-[#FF6F00]/15 border border-[#FF6F00]/30">
+                <Activity className="h-4 w-4 text-[#FF6F00]" />
+              </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-[#FAF7F2]">{stats.recentTransactionsCount}</div>
+              <div className="text-3xl font-bold font-mono text-[#FAF7F2]">{stats.recentTransactionsCount}</div>
             </CardContent>
           </Card>
         </div>
 
-        <Card className="bg-[#1A1614] border border-[#3A3230] lg:col-span-3 overflow-hidden relative group">
-          <div className="absolute inset-0 bg-gradient-to-br from-transparent to-[#FF6F00]/5 pointer-events-none transition-opacity duration-500 opacity-50 group-hover:opacity-100"></div>
-          <CardHeader className="flex flex-row items-center justify-between pb-2 border-b border-[#3A3230]">
-            <CardTitle className="text-sm font-mono tracking-widest text-[#FF6F00] uppercase flex items-center gap-2">
+        <Card className="bg-white/[0.03] backdrop-blur-2xl border border-white/[0.1] lg:col-span-3 overflow-hidden relative group rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.35)]">
+          <div className="absolute inset-0 bg-gradient-to-br from-white/[0.02] to-[#FF6F00]/[0.04] pointer-events-none transition-opacity duration-500 opacity-60 group-hover:opacity-100"></div>
+          <CardHeader className="flex flex-row items-center justify-between pb-3 border-b border-white/[0.08]">
+            <CardTitle className="text-xs font-mono tracking-widest text-[#FF6F00] uppercase flex items-center gap-2">
               <PackageSearch className="h-4 w-4" />
               Inventory Valuation
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-6 grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-4 gap-6 relative z-10">
             <div className="flex flex-col gap-1 lg:col-span-2">
-              <span className="text-xs text-[#7A736E] font-mono tracking-widest uppercase mb-1">Total Retail Value</span>
-              <span className="text-4xl lg:text-5xl font-sans font-bold text-[#FAF7F2] tracking-tight">₱{formatCurrency(stats.inventoryValueRetail)}</span>
-              <div className="mt-2 text-sm text-[#1D9E75] font-mono">
-                Profit: ₱{formatCurrency(stats.inventoryValueRetail - stats.inventoryValueCost)}
+              <span className="text-[10px] text-[#8E857E] font-mono tracking-widest uppercase mb-1">Total Retail Value</span>
+              <span className="text-4xl lg:text-5xl font-mono font-bold text-[#FAF7F2] tracking-tight">₱{formatCurrency(stats.inventoryValueRetail)}</span>
+              <div className="mt-2 text-xs text-[#1D9E75] font-mono font-semibold flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#1D9E75] animate-pulse"></span>
+                Estimated Margin: ₱{formatCurrency(stats.inventoryValueRetail - stats.inventoryValueCost)}
               </div>
             </div>
             
             <div className="flex flex-col gap-1">
-              <span className="text-[10px] text-[#7A736E] font-mono tracking-widest uppercase">Catalog Size</span>
-              <span className="text-xl font-bold font-mono text-[#FAF7F2]">{stats.totalProducts} <span className="text-xs font-sans font-normal text-[#7A736E]">items</span></span>
+              <span className="text-[10px] text-[#8E857E] font-mono tracking-widest uppercase">Catalog Size</span>
+              <span className="text-2xl font-bold font-mono text-[#FAF7F2]">{stats.totalProducts} <span className="text-xs font-sans font-normal text-[#8E857E]">items</span></span>
               
-              <span className="text-[10px] text-[#7A736E] font-mono tracking-widest uppercase mt-4">Total Cost</span>
-              <span className="text-xl font-bold font-mono text-[#7A736E]">₱{formatCurrency(stats.inventoryValueCost)}</span>
+              <span className="text-[10px] text-[#8E857E] font-mono tracking-widest uppercase mt-4">Total Cost</span>
+              <span className="text-xl font-bold font-mono text-[#8E857E]">₱{formatCurrency(stats.inventoryValueCost)}</span>
             </div>
             
-            <div className="flex flex-col gap-1 rounded-lg bg-[#0A0C10] p-4 border border-[#3A3230]">
-              <span className="text-[10px] text-[#7A736E] font-mono tracking-widest uppercase flex justify-between items-center">
+            <div className="flex flex-col gap-1 rounded-xl bg-white/[0.03] backdrop-blur-md p-4 border border-white/[0.08]">
+              <span className="text-[10px] text-[#8E857E] font-mono tracking-widest uppercase flex justify-between items-center">
                 Action Items
-                <AlertTriangle className={`h-3 w-3 ${stats.lowStockItems > 0 ? "text-red-500 animate-pulse" : "text-[#7A736E]"}`} />
+                <AlertTriangle className={`h-3.5 w-3.5 ${stats.lowStockItems > 0 ? "text-amber-500 animate-pulse" : "text-[#8E857E]"}`} />
               </span>
               <div className="mt-auto">
-                <span className={`text-3xl font-bold font-mono ${stats.lowStockItems > 0 ? 'text-red-500' : 'text-[#7A736E]'}`}>
+                <span className={`text-3xl font-bold font-mono ${stats.lowStockItems > 0 ? 'text-amber-400' : 'text-[#8E857E]'}`}>
                   {stats.lowStockItems}
                 </span>
-                <span className="text-xs text-[#7A736E] block mt-1 uppercase font-mono tracking-wider">Low Stock Alerts</span>
+                <span className="text-xs text-[#8E857E] block mt-1 uppercase font-mono tracking-wider mb-2">Low Stock Alerts</span>
+                {stats.lowStockItems > 0 && (
+                  <Button 
+                    variant="outline" 
+                    size="sm"
+                    className="w-full text-[10px] uppercase tracking-widest h-7 border-amber-500/40 text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 hover:text-amber-300 font-mono rounded-lg transition-all"
+                    onClick={() => navigate('/inventory', { state: { createPO: true } })}
+                  >
+                    View & Reorder
+                  </Button>
+                )}
               </div>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:h-[400px]">
-        {/* Main Chart */}
-        <Card className="bg-[#141210] border-[#3A3230] lg:col-span-2 flex flex-col min-h-[350px]">
-          <CardHeader className="border-b border-[#3A3230]/50 pb-4">
-            <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
-              <Activity className="h-4 w-4 text-[#FF6F00]" />
-              REVENUE MONITORING (HOURLY)
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="h-[300px] w-full pt-4">
-             {isLoadingSales ? (
-               <div className="h-full w-full flex items-center justify-center font-mono text-[#7A736E] animate-pulse">
-                 SYNCING DATA...
-               </div>
-             ) : salesError ? (
-               <div className="h-full w-full flex items-center justify-center font-mono text-red-500">
-                 {salesError}
-               </div>
-             ) : salesData.length > 0 ? (
-               <div style={{ width: '100%', height: 300 }}>
-                 <ResponsiveContainer width="100%" height={300}>
-                   <AreaChart data={salesData} margin={{ top: 10, right: 30, bottom: 0, left: 0 }}>
-                     <defs>
-                       <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                         <stop offset="5%" stopColor="#FF6F00" stopOpacity={0.3}/>
-                         <stop offset="95%" stopColor="#FF6F00" stopOpacity={0}/>
-                       </linearGradient>
-                     </defs>
-                     <CartesianGrid strokeDasharray="3 3" stroke="#3A3230" vertical={false} opacity={0.5} />
-                     <XAxis dataKey="name" stroke="#7A736E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickMargin={12} minTickGap={20} />
-                     <YAxis stroke="#7A736E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickFormatter={(value) => `₱${formatCurrency(value)}`} tickMargin={12} width={65} />
-                     <Tooltip 
-                       contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6)' }}
-                       itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px', fontFamily: 'monospace' }}
-                       labelStyle={{ color: '#7A736E', marginBottom: '4px', fontSize: '12px' }}
-                       formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
-                     />
-                     <Area type="natural" dataKey="sales" stroke="#FF6F00" strokeWidth={3} fillOpacity={1} fill="url(#colorSales)" activeDot={{ r: 6, fill: '#FF6F00', stroke: '#1A1614', strokeWidth: 3 }} />
-                   </AreaChart>
-                 </ResponsiveContainer>
-               </div>
-             ) : (
-               <div className="h-full w-full flex items-center justify-center font-mono text-[#7A736E]">AWAITING DATA</div>
-            )}
-          </CardContent>
-        </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+        {/* Main Revenue & Sales Trends Visualization (Daily, Weekly, Hourly) */}
+        <div className="lg:col-span-2">
+          <RevenueTrendsChart 
+            transactions={transactions}
+            isLoading={isLoadingSales}
+            onNavigateToReports={() => navigate('/reports')}
+          />
+        </div>
 
-        {/* AI Insight Placeholder */}
-        <Card className="bg-[#141210] border-[#3A3230] relative overflow-hidden flex flex-col">
-          <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+        {/* AI Insight Assistant Card */}
+        <Card className="glass-card rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.3)] relative overflow-hidden flex flex-col justify-between">
+          <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
              <Activity className="h-32 w-32" />
           </div>
-          <CardHeader className="border-b border-[#3A3230]/50 pb-4">
-            <CardTitle className="text-sm font-mono text-[#1D9E75] flex items-center gap-2 uppercase tracking-widest">
-              <span className="animate-pulse">●</span> AI ASSISTANT (GEMINI)
+          <CardHeader className="border-b border-white/[0.08] pb-4">
+            <CardTitle className="text-xs font-mono text-[#1D9E75] flex items-center gap-2 uppercase tracking-widest">
+              <span className="w-2 h-2 rounded-full bg-[#1D9E75] animate-ping" /> AI Store Intelligence
             </CardTitle>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col pt-4">
-            <div className="space-y-4 flex-1">
+            <div className="space-y-4 flex-1 flex flex-col">
                {forecastData && forecastData.length > 0 ? (
-                 <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
-                   <div className="text-xs text-[#7A736E] font-mono mb-2 flex items-center justify-between">
-                     <span>FORECAST: LOW STOCK WARNING</span>
-                     <span className="text-[#FF6F00]">{forecastData.length} items on watch</span>
+                 <div className="bg-white/[0.03] p-4 rounded-xl border border-white/[0.08] backdrop-blur-md">
+                   <div className="text-xs text-[#8E857E] font-mono mb-2 flex items-center justify-between">
+                     <span>LOW STOCK FORECAST</span>
+                     <span className="text-[#FF6F00] font-semibold">{forecastData.length} items flagged</span>
                    </div>
                    <div className="text-sm text-[#FAF7F2] leading-relaxed">
-                     Based on recent sales rate, <span className="font-bold text-[#FF6F00]">{forecastData[0].name}</span> will run out in <span className="font-bold">{forecastData[0].daysLeft.toFixed(1)} days</span>. 
-                     Recommend ordering <span className="font-bold text-[#1D9E75]">{forecastData[0].reorderQty} units</span> to cover lead time.
+                     Based on current sales velocity, <span className="font-bold text-[#FF6F00]">{forecastData[0].name}</span> has approximately <span className="font-bold">{forecastData[0].daysLeft.toFixed(1)} days</span> of stock remaining. 
+                     Suggested reorder: <span className="font-bold text-[#1D9E75]">{forecastData[0].reorderQty} units</span>.
                    </div>
                  </div>
                ) : (
-                 <div className="bg-[#0A0C10] p-4 rounded border border-[#3A3230]">
-                   <div className="text-xs text-[#7A736E] font-mono mb-2">FORECAST: ALL STABLE</div>
+                 <div className="bg-white/[0.03] p-4 rounded-xl border border-white/[0.08] backdrop-blur-md">
+                   <div className="text-xs text-[#8E857E] font-mono mb-2">INVENTORY STABLE</div>
                    <div className="text-sm text-[#FAF7F2] leading-relaxed">
                      No critical stock depletion warnings detected based on recent sales.
                    </div>
                  </div>
                )}
                
-               {/* We will build the global terminal chatbot later */}
-               <div className="text-center mt-auto pb-2">
+               <div className="text-center mt-auto pb-2 pt-4">
                  <button 
                    onClick={() => window.dispatchEvent(new CustomEvent('open-terminal'))}
-                   className="text-[#FF6F00] font-mono text-xs border-b border-dashed border-[#FF6F00] pb-1 hover:text-[#FAF7F2] hover:border-[#FAF7F2] transition-colors"
+                   className="w-full text-[#FF6F00] hover:text-[#FAF7F2] font-mono text-xs px-3 py-2 rounded-xl bg-[#FF6F00]/10 border border-[#FF6F00]/30 hover:bg-[#FF6F00]/20 transition-all shadow-sm flex items-center justify-center gap-1.5"
                  >
-                   OPEN ASSISTANT TERMINAL
+                   <span>Open Foresight Terminal (F4)</span>
+                   <span>→</span>
                  </button>
                </div>
             </div>
@@ -434,54 +439,48 @@ export function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6 items-start">
         {/* Detailed Foresight Forecast */}
         <div className="lg:col-span-2">
-          <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px]">
-            <CardHeader className="border-b border-[#3A3230]/50 pb-4">
-              <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
+          <Card className="glass-card rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex flex-col min-h-[350px]">
+            <CardHeader className="border-b border-white/[0.08] pb-4">
+              <CardTitle className="text-xs font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-[#FF6F00]" />
-                Stockout Predictions & Suggestions
+                Stockout Predictions & Replenishment
               </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 p-0">
               {forecastData && forecastData.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm text-left">
-                    <thead className="text-xs font-mono uppercase bg-[#1A1614] text-[#7A736E] border-b border-[#3A3230]">
+                    <thead className="text-[11px] font-mono uppercase bg-white/[0.03] text-[#8E857E] border-b border-white/[0.08]">
                       <tr>
-                        <th className="px-6 py-4 font-medium">Product Name</th>
-                        <th className="px-6 py-4 font-medium text-right">Current Stock</th>
-                        <th className="px-6 py-4 font-medium text-right">Sales/Day</th>
-                        <th className="px-6 py-4 font-medium text-right">Days Left</th>
-                        <th className="px-6 py-4 font-medium text-right">Est. Depletion</th>
-                        <th className="px-6 py-4 font-medium text-right text-[#1D9E75]">Suggested Order</th>
-                        <th className="px-6 py-4 font-medium text-right">Actions</th>
+                        <th className="px-6 py-3.5 font-medium">Product</th>
+                        <th className="px-6 py-3.5 font-medium text-right">Current Stock</th>
+                        <th className="px-6 py-3.5 font-medium text-right">Velocity</th>
+                        <th className="px-6 py-3.5 font-medium text-right">Depletion Est.</th>
+                        <th className="px-6 py-3.5 font-medium text-right text-[#1D9E75]">Suggested Order</th>
+                        <th className="px-6 py-3.5 font-medium text-right">Action</th>
                       </tr>
                     </thead>
-                    <tbody>
-                      {forecastData.map((item, i) => {
-                        const stockoutDate = new Date();
-                        stockoutDate.setDate(stockoutDate.getDate() + item.daysLeft);
+                    <tbody className="divide-y divide-white/[0.05]">
+                      {forecastData.map((item) => {
                         const isCritical = item.daysLeft <= 3;
                         const isWarning = item.daysLeft <= 7 && !isCritical;
                         return (
-                          <tr key={item.id} className="border-b border-[#3A3230]/50 hover:bg-[#1A1614] text-[#FAF7F2] transition-colors">
-                            <td className="px-6 py-4 font-medium">{item.name}</td>
-                            <td className="px-6 py-4 text-right">{item.stock}</td>
-                            <td className="px-6 py-4 text-right">{item.velocity.toFixed(2)}</td>
-                            <td className={`px-6 py-4 text-right font-bold ${isCritical ? 'text-red-500' : isWarning ? 'text-[#FF6F00]' : ''}`}>
+                          <tr key={item.id} className="hover:bg-white/[0.04] text-[#FAF7F2] transition-colors">
+                            <td className="px-6 py-3.5 font-medium">{item.name}</td>
+                            <td className="px-6 py-3.5 text-right font-mono tabular-nums">{item.stock}</td>
+                            <td className="px-6 py-3.5 text-right font-mono tabular-nums text-[#8E857E]">{item.velocity.toFixed(2)}/day</td>
+                            <td className={`px-6 py-3.5 text-right font-mono tabular-nums font-bold ${isCritical ? 'text-red-400' : isWarning ? 'text-[#FF6F00]' : ''}`}>
                               {item.daysLeft.toFixed(1)} days
                             </td>
-                            <td className={`px-6 py-4 text-right ${isCritical ? 'text-red-500 font-medium' : isWarning ? 'text-[#FF6F00]' : 'text-[#7A736E]'}`}>
-                              {stockoutDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                            <td className="px-6 py-3.5 text-right font-mono tabular-nums font-bold text-[#1D9E75]">
+                              {item.reorderQty} units
                             </td>
-                            <td className="px-6 py-4 text-right font-bold text-[#1D9E75] bg-[#1D9E75]/5">
-                              {item.reorderQty}
-                            </td>
-                            <td className="px-6 py-4 text-right">
+                            <td className="px-6 py-3.5 text-right">
                                <button 
-                                 className="px-3 py-1 bg-[#FF6F00]/10 hover:bg-[#FF6F00]/20 text-[#FF6F00] text-[10px] uppercase font-mono tracking-widest rounded border border-[#FF6F00]/30 transition-colors"
+                                 className="px-2.5 py-1 bg-[#FF6F00]/10 hover:bg-[#FF6F00]/25 text-[#FF6F00] text-[10px] uppercase font-mono tracking-wider rounded-md border border-[#FF6F00]/30 transition-colors"
                                  onClick={() => navigate('/inventory', { state: { createPO: true, productId: item.id, qty: item.reorderQty } })}
                                >
-                                 Create Order
+                                 Create PO
                                </button>
                             </td>
                           </tr>
@@ -491,10 +490,10 @@ export function Dashboard() {
                   </table>
                 </div>
               ) : (
-                <div className="h-full w-full min-h-[250px] flex flex-col items-center justify-center text-[#7A736E] font-mono py-10">
-                   <PackageSearch className="w-12 h-12 mb-3 opacity-20" />
-                   <span>INVENTORY LEVELS STABLE</span>
-                   <span className="text-xs mt-1 opacity-70">No critical stock depletion predicted in the near term.</span>
+                <div className="h-full w-full min-h-[250px] flex flex-col items-center justify-center text-[#8E857E] font-mono py-10">
+                   <PackageSearch className="w-10 h-10 mb-2 opacity-30 text-[#FF6F00]" />
+                   <span className="text-xs uppercase tracking-wider">Inventory Levels Nominal</span>
+                   <span className="text-[11px] mt-1 text-[#8E857E]">No stock depletion predicted in current operational cycle.</span>
                 </div>
               )}
             </CardContent>
@@ -503,23 +502,23 @@ export function Dashboard() {
 
         {/* Sales By Category */}
         <div className="lg:col-span-1">
-          <Card className="bg-[#141210] border-[#3A3230] flex flex-col min-h-[350px] h-full">
-            <CardHeader className="border-b border-[#3A3230]/50 pb-4">
-              <CardTitle className="text-sm font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
+          <Card className="glass-card rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex flex-col min-h-[350px] h-full">
+            <CardHeader className="border-b border-white/[0.08] pb-4">
+              <CardTitle className="text-xs font-mono text-[#FAF7F2] uppercase tracking-widest flex items-center gap-2">
                 <PieChartIcon className="h-4 w-4 text-[#1D9E75]" />
                 Sales By Category
               </CardTitle>
             </CardHeader>
             <CardContent className="flex-1 w-full relative pt-4 flex flex-col items-center justify-center">
               {isLoadingSales ? (
-                <div className="flex flex-col items-center justify-center font-mono text-[#7A736E] animate-pulse">
+                <div className="flex flex-col items-center justify-center font-mono text-[#8E857E] animate-pulse">
                   <Activity className="h-6 w-6 mb-2 opacity-50" />
                   <span className="text-xs tracking-widest">CALCULATING...</span>
                 </div>
               ) : salesError ? (
-                <div className="flex flex-col items-center justify-center font-mono text-red-500 px-6 text-center">
+                <div className="flex flex-col items-center justify-center font-mono text-red-400 px-6 text-center">
                   <AlertTriangle className="h-6 w-6 mb-2 opacity-80" />
-                  <span className="text-sm">{salesError}</span>
+                  <span className="text-xs">{salesError}</span>
                 </div>
               ) : salesByCategory.length > 0 ? (
                 <ResponsiveContainer width="100%" height={300}>
@@ -542,8 +541,8 @@ export function Dashboard() {
                       ))}
                     </Pie>
                     <Tooltip 
-                      contentStyle={{ backgroundColor: '#1A1614', border: '1px solid #3A3230', borderRadius: '8px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.6)' }}
-                      itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px' }}
+                      contentStyle={{ backgroundColor: 'rgba(20, 18, 16, 0.88)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '12px', boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)' }}
+                      itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '13px', fontFamily: 'monospace' }}
                       formatter={(value: number, name: string) => [`₱${formatCurrency(value)}`, name]}
                     />
                     <Legend 
@@ -555,7 +554,7 @@ export function Dashboard() {
                   </PieChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="flex flex-col items-center justify-center font-mono text-[#7A736E]">
+                <div className="flex flex-col items-center justify-center font-mono text-[#8E857E]">
                   <Activity className="w-8 h-8 opacity-20 mb-3" />
                   <span className="text-xs tracking-widest">NO DATA AVAILABLE</span>
                 </div>

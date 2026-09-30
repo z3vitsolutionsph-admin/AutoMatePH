@@ -1,10 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
-import { db } from '../lib/firebase';
-import { collection, query, getDocs, orderBy } from 'firebase/firestore';
+import { db, collection, query, getDocs, orderBy } from '../lib/realtime';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
 import { BarChart3, Calendar, FileText, Download, TrendingUp, Box, AlertTriangle, Bot, Filter, Search, ShoppingBag, ArrowUpRight, Activity } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -63,7 +61,7 @@ export function Reports() {
         setProducts(prods);
 
       } catch (error) {
-        handleFirestoreError(error, OperationType.GET, 'reportsData');
+        console.error('Reports data load error:', error);
       } finally {
         setIsLoading(false);
       }
@@ -235,7 +233,7 @@ export function Reports() {
   }
 
   return (
-    <div className="space-y-6 flex flex-col h-full bg-[#0A0C10] p-4 text-[#FAF7F2]">
+    <div className="space-y-6 flex flex-col h-full text-[#FAF7F2]">
       
       {/* Header and Global Filters */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4">
@@ -243,39 +241,39 @@ export function Reports() {
           <h2 className="text-2xl font-bold tracking-tight text-[#FAF7F2] flex items-center gap-2 font-sans">
             <BarChart3 className="h-6 w-6 text-[#FF6F00]" /> Reports & Analytics
           </h2>
-          <p className="text-sm font-mono text-[#7A736E]">Advanced system diagnostics and performance metrics</p>
+          <p className="text-sm font-mono text-[#8E857E]">Advanced operational diagnostics and performance metrics</p>
         </div>
         
-        <div className="flex flex-col md:flex-row flex-wrap items-stretch md:items-center gap-3 bg-[#141210] p-2 border border-[#3A3230] rounded-lg w-full md:w-auto">
+        <div className="flex flex-col md:flex-row flex-wrap items-stretch md:items-center gap-3 bg-white/[0.03] backdrop-blur-xl p-2 border border-white/[0.08] rounded-xl w-full md:w-auto shadow-sm">
            <div className="flex items-center gap-2 flex-1 md:flex-none">
-             <Calendar className="h-4 w-4 text-[#7A736E] shrink-0" />
+             <Calendar className="h-4 w-4 text-[#8E857E] shrink-0" />
              <Input 
                 type="date" 
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="bg-[#0A0C10] border-[#3A3230] text-xs h-8 w-full md:w-[130px]" 
+                className="bg-white/[0.04] border-white/[0.08] text-xs h-8 w-full md:w-[130px] text-[#FAF7F2] backdrop-blur-md" 
              />
-             <span className="text-[#7A736E] text-xs">to</span>
+             <span className="text-[#8E857E] text-xs">to</span>
              <Input 
                 type="date" 
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                className="bg-[#0A0C10] border-[#3A3230] text-xs h-8 w-full md:w-[130px]" 
+                className="bg-white/[0.04] border-white/[0.08] text-xs h-8 w-full md:w-[130px] text-[#FAF7F2] backdrop-blur-md" 
              />
            </div>
            
-           <div className="h-4 w-px bg-[#3A3230] hidden md:block"></div>
+           <div className="h-4 w-px bg-white/[0.1] hidden md:block"></div>
            
            <div className="flex items-center gap-2 flex-1 md:flex-none">
-             <Filter className="h-4 w-4 text-[#7A736E] shrink-0" />
+             <Filter className="h-4 w-4 text-[#8E857E] shrink-0" />
              <select 
                value={locationFilter}
                onChange={(e) => setLocationFilter(e.target.value)}
-               className="bg-[#0A0C10] border border-[#3A3230] rounded-md text-xs h-8 px-2 text-[#FAF7F2] outline-none w-full md:w-auto"
+               className="bg-white/[0.04] border border-white/[0.08] rounded-md text-xs h-8 px-2 text-[#FAF7F2] outline-none w-full md:w-auto backdrop-blur-md"
              >
-               <option value="All">All Locations</option>
-               <option value="Store 1">Main Store</option>
-               <option value="Warehouse">Warehouse</option>
+               <option value="All" className="bg-[#141210]">All Locations</option>
+               <option value="Store 1" className="bg-[#141210]">Main Store</option>
+               <option value="Warehouse" className="bg-[#141210]">Warehouse</option>
              </select>
            </div>
         </div>
@@ -283,15 +281,15 @@ export function Reports() {
 
       <Tabs defaultValue="sales" className="flex-1 flex flex-col min-h-0">
           <div className="w-full overflow-x-auto pb-2 mb-2 custom-scrollbar">
-            <TabsList className="bg-[#141210] border border-[#3A3230] h-12 p-1 min-w-max flex justify-start">
-               <TabsTrigger value="sales" className="data-[state=active]:bg-[#0A0C10] data-[state=active]:text-[#FF6F00] font-mono text-xs whitespace-nowrap">
+            <TabsList className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] h-12 p-1 min-w-max flex justify-start rounded-xl">
+               <TabsTrigger value="sales" className="data-[state=active]:bg-[#FF6F00]/20 data-[state=active]:text-[#FF6F00] data-[state=active]:border-white/[0.1] font-mono text-xs whitespace-nowrap text-[#FAF7F2] rounded-lg">
                  <TrendingUp className="h-4 w-4 mr-2" /> Sales Performance
                </TabsTrigger>
-               <TabsTrigger value="inventory" className="data-[state=active]:bg-[#0A0C10] data-[state=active]:text-[#FF6F00] font-mono text-xs whitespace-nowrap">
+               <TabsTrigger value="inventory" className="data-[state=active]:bg-[#FF6F00]/20 data-[state=active]:text-[#FF6F00] data-[state=active]:border-white/[0.1] font-mono text-xs whitespace-nowrap text-[#FAF7F2] rounded-lg">
                  <Box className="h-4 w-4 mr-2" /> Inventory Health
                </TabsTrigger>
-               <TabsTrigger value="ai-forecast" className="data-[state=active]:bg-[#0A0C10] data-[state=active]:text-[#FF6F00] font-mono text-xs relative overflow-hidden group whitespace-nowrap">
-                 <span className="absolute inset-0 bg-gradient-to-r from-transparent via-[#FF6F00]/10 to-transparent translate-x-[-100%] group-hover:animate-[scan_1.5s_ease-in-out_infinite]"></span>
+               <TabsTrigger value="ai-forecast" className="data-[state=active]:bg-[#FF6F00]/20 data-[state=active]:text-[#FF6F00] data-[state=active]:border-white/[0.1] font-mono text-xs relative overflow-hidden group whitespace-nowrap text-[#FAF7F2] rounded-lg">
+                 <span className="absolute inset-0 bg-gradient-to-r from-transparent via-[#FF6F00]/15 to-transparent translate-x-[-100%] group-hover:animate-[scan_1.5s_ease-in-out_infinite]"></span>
                  <Bot className="h-4 w-4 mr-2 text-[#FF6F00]" /> AI Demand Forecast
                </TabsTrigger>
             </TabsList>
@@ -299,15 +297,15 @@ export function Reports() {
 
           {/* SALES PERFORMANCE TAB */}
           <TabsContent value="sales" className="flex-1 space-y-4 focus-visible:outline-none overflow-y-auto">
-             <div className="flex bg-[#141210] border border-[#3A3230] rounded-md p-1 overflow-x-auto w-full sm:w-fit custom-scrollbar">
+             <div className="flex bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] rounded-xl p-1 overflow-x-auto w-full sm:w-fit custom-scrollbar">
                 {['daily', 'weekly', 'monthly', 'quarterly', 'yearly'].map(f => (
                   <button
                     key={f}
                     onClick={() => setDateFilter(f as any)}
-                    className={`px-3 py-1.5 text-xs font-mono tracking-widest uppercase transition-colors rounded-sm whitespace-nowrap ${
+                    className={`px-3 py-1.5 text-xs font-mono tracking-widest uppercase transition-colors rounded-lg whitespace-nowrap ${
                       dateFilter === f 
-                        ? 'bg-[#FF6F00] text-black font-bold' 
-                        : 'text-[#7A736E] hover:text-[#FAF7F2] hover:bg-[#1A1614]'
+                        ? 'bg-[#FF6F00] text-[#0A0C10] font-bold shadow-[0_0_12px_rgba(255,111,0,0.3)]' 
+                        : 'text-[#8E857E] hover:text-[#FAF7F2] hover:bg-white/[0.05]'
                     }`}
                   >
                     {f}
@@ -317,35 +315,35 @@ export function Reports() {
 
              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-                  <Card className="bg-[#141210] border-[#3A3230] hover:border-[#1D9E75]/50 transition-colors">
+                  <Card className="glass-card rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.25)] hover:border-[#1D9E75]/50 transition-colors">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <CardTitle className="text-sm font-mono font-medium text-[#7A736E]">TOTAL REVENUE</CardTitle>
+                      <CardTitle className="text-xs font-mono font-medium text-[#8E857E] uppercase tracking-wider">TOTAL REVENUE</CardTitle>
                       <Activity className="h-4 w-4 text-[#1D9E75]" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold text-[#FAF7F2]">₱{formatCurrency(salesData.totalRevenue)}</div>
+                      <div className="text-2xl font-bold font-mono text-[#FAF7F2]">₱{formatCurrency(salesData.totalRevenue)}</div>
                     </CardContent>
                   </Card>
                 </motion.div>
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-                  <Card className="bg-[#141210] border-[#3A3230] hover:border-[#3498DB]/50 transition-colors">
+                  <Card className="glass-card rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.25)] hover:border-[#3498DB]/50 transition-colors">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <CardTitle className="text-sm font-mono font-medium text-[#7A736E]">TRANSACTIONS</CardTitle>
+                      <CardTitle className="text-xs font-mono font-medium text-[#8E857E] uppercase tracking-wider">TRANSACTIONS</CardTitle>
                       <FileText className="h-4 w-4 text-[#3498DB]" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold text-[#FAF7F2]">{salesData.totalTransactions}</div>
+                      <div className="text-2xl font-bold font-mono text-[#FAF7F2]">{salesData.totalTransactions}</div>
                     </CardContent>
                   </Card>
                 </motion.div>
                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-                  <Card className="bg-[#141210] border-[#3A3230] hover:border-[#9B59B6]/50 transition-colors">
+                  <Card className="glass-card rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.25)] hover:border-[#9B59B6]/50 transition-colors">
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                      <CardTitle className="text-sm font-mono font-medium text-[#7A736E]">AVG ORDER VALUE</CardTitle>
+                      <CardTitle className="text-xs font-mono font-medium text-[#8E857E] uppercase tracking-wider">AVG ORDER VALUE</CardTitle>
                       <ShoppingBag className="h-4 w-4 text-[#9B59B6]" />
                     </CardHeader>
                     <CardContent>
-                      <div className="text-2xl font-bold text-[#FAF7F2]">₱{formatCurrency(salesData.totalTransactions ? salesData.totalRevenue / salesData.totalTransactions : 0)}</div>
+                      <div className="text-2xl font-bold font-mono text-[#FAF7F2]">₱{formatCurrency(salesData.totalTransactions ? salesData.totalRevenue / salesData.totalTransactions : 0)}</div>
                     </CardContent>
                   </Card>
                 </motion.div>
@@ -353,8 +351,8 @@ export function Reports() {
 
              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="lg:col-span-2">
-                   <Card className="bg-[#1A1614] border-[#3A3230] p-4 sm:p-6 h-[400px] flex flex-col">
-                      <h3 className="font-mono text-sm tracking-widest text-[#7A736E] mb-4 flex items-center gap-2 shrink-0">
+                   <Card className="glass-card rounded-2xl border border-white/[0.08] p-4 sm:p-6 h-[300px] sm:h-[400px] flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+                      <h3 className="font-mono text-xs tracking-widest text-[#8E857E] mb-4 flex items-center gap-2 shrink-0 uppercase">
                         <TrendingUp className="h-4 w-4 text-[#FF6F00]" /> REVENUE TREND
                       </h3>
                       {salesData.chartData.length > 0 ? (
@@ -363,21 +361,21 @@ export function Reports() {
                             <AreaChart data={salesData.chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                             <defs>
                               <linearGradient id="colorSales" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#FF6F00" stopOpacity={0.3}/>
+                                <stop offset="5%" stopColor="#FF6F00" stopOpacity={0.35}/>
                                 <stop offset="95%" stopColor="#FF6F00" stopOpacity={0}/>
                               </linearGradient>
                             </defs>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#3A3230" vertical={false} opacity={0.5} />
-                            <XAxis dataKey="name" stroke="#7A736E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickMargin={12} />
-                            <YAxis stroke="#7A736E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickFormatter={(value) => `₱${formatCurrency(value)}`} />
+                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+                            <XAxis dataKey="name" stroke="#8E857E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickMargin={12} />
+                            <YAxis stroke="#8E857E" fontSize={10} fontFamily="monospace" tickLine={false} axisLine={false} tickFormatter={(value) => `₱${formatCurrency(value)}`} />
                             <Tooltip 
                               cursor={{ fill: 'transparent', stroke: '#FF6F00', strokeWidth: 1, strokeDasharray: '4 4' }}
-                              contentStyle={{ backgroundColor: '#141210', border: '1px solid #3A3230', borderRadius: '8px' }}
-                              itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '14px', fontFamily: 'monospace' }}
-                              labelStyle={{ color: '#7A736E', marginBottom: '4px', fontSize: '12px' }}
+                              contentStyle={{ backgroundColor: 'rgba(20, 18, 16, 0.88)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '12px', boxShadow: '0 20px 40px rgba(0, 0, 0, 0.6)' }}
+                              itemStyle={{ color: '#FAF7F2', fontWeight: 600, fontSize: '13px', fontFamily: 'monospace' }}
+                              labelStyle={{ color: '#8E857E', marginBottom: '4px', fontSize: '11px', fontFamily: 'monospace' }}
                               formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
                             />
-                            <Area type="monotone" dataKey="sales" stroke="#FF6F00" fillOpacity={1} fill="url(#colorSales)" />
+                            <Area type="monotone" dataKey="sales" stroke="#FF6F00" strokeWidth={2} fillOpacity={1} fill="url(#colorSales)" />
                           </AreaChart>
                         </ResponsiveContainer>
                         </div>
@@ -388,18 +386,18 @@ export function Reports() {
                  </motion.div>
 
                  <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="lg:col-span-1">
-                   <Card className="bg-[#1A1614] border-[#3A3230] p-4 sm:p-6 h-[400px] flex flex-col">
-                      <h3 className="font-mono text-sm tracking-widest text-[#7A736E] mb-4 shrink-0">TOP PRODUCTS BY REVENUE</h3>
+                   <Card className="glass-card rounded-2xl border border-white/[0.08] p-4 sm:p-6 h-[300px] sm:h-[400px] flex flex-col shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+                      <h3 className="font-mono text-xs tracking-widest text-[#8E857E] mb-4 shrink-0 uppercase">TOP PRODUCTS BY REVENUE</h3>
                       {salesData.topProducts.length > 0 ? (
                         <div className="flex-1 w-full min-h-0">
                           <ResponsiveContainer width="100%" height="100%">
                              <BarChart data={salesData.topProducts} layout="vertical" margin={{ top: 0, right: 30, left: 10, bottom: 0 }}>
-                             <CartesianGrid strokeDasharray="3 3" stroke="#3A3230" horizontal={false} opacity={0.5} />
+                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" horizontal={false} />
                              <XAxis type="number" hide />
                              <YAxis type="category" dataKey="name" stroke="#FAF7F2" fontSize={11} fontFamily="sans-serif" tickLine={false} axisLine={false} width={90} tick={{ fill: '#FAF7F2' }} />
                              <Tooltip 
-                               cursor={{ fill: '#3A3230', opacity: 0.2 }}
-                               contentStyle={{ backgroundColor: '#141210', border: '1px solid #3A3230', borderRadius: '8px' }}
+                               cursor={{ fill: 'rgba(255, 255, 255, 0.04)' }}
+                               contentStyle={{ backgroundColor: 'rgba(20, 18, 16, 0.88)', backdropFilter: 'blur(16px)', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '12px' }}
                                formatter={(value: number) => [`₱${formatCurrency(value)}`, 'Revenue']}
                              />
                              <Bar dataKey="revenue" fill="#1D9E75" radius={[0, 4, 4, 0]}>
@@ -411,7 +409,7 @@ export function Reports() {
                           </ResponsiveContainer>
                         </div>
                       ) : (
-                        <div className="flex-1 flex items-center justify-center text-[#7A736E] font-mono">No product data.</div>
+                        <div className="flex-1 flex items-center justify-center text-[#8E857E] font-mono">No product data.</div>
                       )}
                    </Card>
                  </motion.div>
@@ -421,15 +419,15 @@ export function Reports() {
           {/* INVENTORY HEALTH TAB */}
           <TabsContent value="inventory" className="flex-1 space-y-4 focus-visible:outline-none overflow-y-auto">
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-                 <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }} className="lg:col-span-1 border border-[#3A3230] rounded-xl overflow-hidden shadow-sm flex flex-col h-[400px]">
-                   <Card className="bg-[#141210] border-none flex flex-col h-full rounded-none">
-                      <CardHeader className="flex flex-row gap-2 border-b border-[#3A3230] pb-4 shrink-0">
-                         <div className="bg-red-500/10 p-2 rounded-lg">
-                           <AlertTriangle className="h-5 w-5 text-red-500" />
+                 <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }} className="lg:col-span-1 rounded-2xl overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex flex-col h-[350px] sm:h-[400px]">
+                   <Card className="glass-card flex flex-col h-full rounded-2xl border border-white/[0.08]">
+                      <CardHeader className="flex flex-row gap-2 border-b border-white/[0.08] pb-4 shrink-0">
+                         <div className="bg-red-500/10 border border-red-500/20 p-2 rounded-lg">
+                           <AlertTriangle className="h-5 w-5 text-red-400" />
                          </div>
                          <div>
-                           <CardTitle className="text-sm font-mono text-[#FAF7F2]">LOW STOCK ALERTS</CardTitle>
-                           <CardDescription className="text-[#7A736E] text-xs">Items at or below minimum threshold</CardDescription>
+                           <CardTitle className="text-xs font-mono text-[#FAF7F2] uppercase tracking-wider">LOW STOCK ALERTS</CardTitle>
+                           <CardDescription className="text-[#8E857E] text-xs">Items at or below minimum threshold</CardDescription>
                          </div>
                       </CardHeader>
                       <CardContent className="flex-1 overflow-y-auto p-0 min-h-0">
@@ -446,7 +444,7 @@ export function Reports() {
                                  <TableRow key={p.id} className="border-[#3A3230] hover:bg-[#1A1614]/50 transition-colors">
                                     <TableCell className="font-semibold text-sm py-2">
                                       <div className="flex flex-col">
-                                        <span className="truncate max-w-[120px]" title={p.name}>{p.name}</span>
+                                        <span className="truncate max-w-[100px] sm:max-w-[150px]" title={p.name}>{p.name}</span>
                                         <span className="text-[10px] text-[#7A736E]">{p.category}</span>
                                       </div>
                                     </TableCell>
@@ -476,15 +474,15 @@ export function Reports() {
                    </Card>
                  </motion.div>
 
-                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="lg:col-span-1 border border-[#3A3230] rounded-xl overflow-hidden shadow-sm flex flex-col h-[400px]">
-                   <Card className="bg-[#141210] border-none flex flex-col h-full rounded-none">
-                      <CardHeader className="flex flex-row gap-2 border-b border-[#3A3230] pb-4 shrink-0">
-                         <div className="bg-[#3498DB]/10 p-2 rounded-lg">
+                 <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="lg:col-span-1 rounded-2xl overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex flex-col h-[350px] sm:h-[400px]">
+                   <Card className="glass-card flex flex-col h-full rounded-2xl border border-white/[0.08]">
+                      <CardHeader className="flex flex-row gap-2 border-b border-white/[0.08] pb-4 shrink-0">
+                         <div className="bg-[#3498DB]/10 border border-[#3498DB]/20 p-2 rounded-lg">
                            <TrendingUp className="h-5 w-5 text-[#3498DB]" />
                          </div>
                          <div>
-                           <CardTitle className="text-sm font-mono text-[#FAF7F2]">TURNOVER VELOCITY</CardTitle>
-                           <CardDescription className="text-[#7A736E] text-xs">Top products by estimated velocity</CardDescription>
+                           <CardTitle className="text-xs font-mono text-[#FAF7F2] uppercase tracking-wider">TURNOVER VELOCITY</CardTitle>
+                           <CardDescription className="text-[#8E857E] text-xs">Top products by estimated velocity</CardDescription>
                          </div>
                       </CardHeader>
                       <CardContent className="flex-1 overflow-y-auto p-0 min-h-0">
@@ -499,9 +497,9 @@ export function Reports() {
                            <TableBody>
                               {inventoryData.turnoverData.map((p, i) => (
                                  <TableRow key={p.id} className="border-[#3A3230] hover:bg-[#1A1614]/50 transition-colors">
-                                    <TableCell className="font-semibold text-sm truncate max-w-[120px] py-2" title={p.name}>
+                                    <TableCell className="font-semibold text-sm truncate max-w-[100px] sm:max-w-[150px] py-2" title={p.name}>
                                       <div className="flex items-center gap-2">
-                                        <span className="text-[#7A736E] text-xs font-mono w-4">{i + 1}.</span>
+                                        <span className="text-[#7A736E] text-xs font-mono w-4 shrink-0">{i + 1}.</span>
                                         <span className="truncate">{p.name}</span>
                                       </div>
                                     </TableCell>
@@ -535,14 +533,14 @@ export function Reports() {
                    </Card>
                  </motion.div>
 
-                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }} className="lg:col-span-1 border border-[#3A3230] rounded-xl overflow-hidden shadow-sm flex flex-col h-[400px]">
-                   <Card className="bg-[#141210] border-none flex flex-col h-full rounded-none">
-                      <CardHeader className="flex flex-row gap-2 border-b border-[#3A3230] pb-4 shrink-0">
-                         <div className="bg-[#8E44AD]/10 p-2 rounded-lg">
+                 <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.3 }} className="lg:col-span-1 rounded-2xl overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex flex-col h-[350px] sm:h-[400px]">
+                   <Card className="glass-card flex flex-col h-full rounded-2xl border border-white/[0.08]">
+                      <CardHeader className="flex flex-row gap-2 border-b border-white/[0.08] pb-4 shrink-0">
+                         <div className="bg-[#8E44AD]/10 border border-[#8E44AD]/20 p-2 rounded-lg">
                            <Box className="h-5 w-5 text-[#8E44AD]" />
                          </div>
                          <div>
-                           <CardTitle className="text-sm font-mono text-[#FAF7F2]">CATEGORY BREAKDOWN</CardTitle>
+                           <CardTitle className="text-xs font-mono text-[#FAF7F2] uppercase tracking-wider">CATEGORY BREAKDOWN</CardTitle>
                            <CardDescription className="text-[#7A736E] text-xs">Revenue grouped by category</CardDescription>
                          </div>
                       </CardHeader>
@@ -556,8 +554,8 @@ export function Reports() {
                                    data={salesData.categoryData} 
                                    cx="50%" 
                                    cy="50%" 
-                                   innerRadius={40} 
-                                   outerRadius={80} 
+                                   innerRadius="50%" 
+                                   outerRadius="80%" 
                                    paddingAngle={5} 
                                    dataKey="value"
                                    stroke="none"
@@ -604,7 +602,7 @@ export function Reports() {
           {/* AI FORECAST TAB */}
           <TabsContent value="ai-forecast" className="flex-1 space-y-4 focus-visible:outline-none overflow-y-auto">
              <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.1 }} className="h-full">
-               <Card className="bg-[#141210] border-[#3A3230] p-4 sm:p-6 min-h-[500px] flex flex-col relative overflow-hidden group">
+               <Card className="glass-card rounded-2xl border border-white/[0.08] p-4 sm:p-6 min-h-[400px] sm:min-h-[500px] flex flex-col relative overflow-hidden group shadow-[0_16px_48px_rgba(0,0,0,0.35)]">
                   {/* Background grid effect */}
                   <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCI+PHBhdGggZD0iTTAgMGg0MHY0MEgweiIgZmlsbD0ibm9uZSIvPjxwYXRoIGQ0iTTAgNDBoNDBNNDAgMHY0MCIgc3Ryb2tlPSIjM0EzMjMwIiBzdHJva2Utd2lkdGg9IjEiIGZpbGwtb3BhY2l0eT0iMC4xIi8+PC9zdmc+')] opacity-20 pointer-events-none"></div>
                   

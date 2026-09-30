@@ -1,14 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Search, Tag, Edit, Trash2, Calendar, CheckCircle2, Ticket, ShoppingCart, Package, Folder, AlertCircle } from 'lucide-react';
-import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { collection, query, onSnapshot, doc, setDoc, deleteDoc, serverTimestamp, getDocs, where, db } from '../lib/realtime';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { toast } from 'sonner';
 
 interface Promotion {
@@ -70,7 +68,7 @@ export function Promotions() {
       setPromotions(data);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'promotions');
+      console.error('Error fetching promotions:', error);
       setLoading(false);
     });
 
@@ -176,12 +174,12 @@ export function Promotions() {
         ...(isNew && { createdAt: serverTimestamp() })
       };
 
-      await setDoc(docRef, payload, { merge: true });
+      await setDoc(docRef, payload);
       toast.success(`Promotion ${isNew ? 'created' : 'updated'} successfully!`);
       setIsDialogOpen(false);
-    } catch (error) {
-      handleFirestoreError(error, editingPromo ? OperationType.UPDATE : OperationType.CREATE, 'promotions');
-      toast.error('Failed to save promotion');
+    } catch (error: any) {
+      console.error('Save promo error:', error);
+      toast.error(error.message || 'Failed to save promotion');
     } finally {
       setIsSubmitting(false);
     }
@@ -193,11 +191,11 @@ export function Promotions() {
       await setDoc(docRef, { 
         active: !promo.active,
         updatedAt: serverTimestamp()
-      }, { merge: true });
+      });
       toast.success(`Promotion ${promo.active ? 'deactivated' : 'activated'}`);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'promotions');
-      toast.error('Failed to update promotion status');
+    } catch (error: any) {
+      console.error('Toggle promo error:', error);
+      toast.error(error.message || 'Failed to update promotion status');
     }
   };
 
@@ -206,9 +204,9 @@ export function Promotions() {
       try {
         await deleteDoc(doc(db, 'promotions', id));
         toast.success('Promotion deleted');
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, 'promotions');
-        toast.error('Failed to delete promotion');
+      } catch (error: any) {
+        console.error('Delete promo error:', error);
+        toast.error(error.message || 'Failed to delete promotion');
       }
     }
   };
@@ -239,14 +237,14 @@ export function Promotions() {
          </Button>
        </div>
 
-       <div className="bg-[#141210] border border-[#3A3230] p-2 rounded-lg flex items-center gap-2">
-         <Search className="h-4 w-4 text-[#7A736E] ml-2" />
+       <div className="bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] p-1.5 rounded-xl flex items-center gap-2 shadow-sm focus-within:border-[#FF6F00] transition-colors">
+         <Search className="h-4 w-4 text-[#8E857E] ml-2" />
          <Input
            type="text"
            placeholder="Search promotions by name or code..."
            value={search}
            onChange={(e) => setSearch(e.target.value)}
-           className="bg-transparent border-none text-sm text-[#FAF7F2] focus-visible:ring-0 placeholder:text-[#7A736E]"
+           className="bg-transparent border-none text-sm text-[#FAF7F2] focus-visible:ring-0 placeholder:text-[#8E857E]"
          />
        </div>
 
@@ -254,7 +252,7 @@ export function Promotions() {
          <div className="flex-1 flex justify-center items-center">
            <div className="flex flex-col items-center gap-4">
              <div className="animate-spin text-[#FF6F00]"><Ticket className="h-8 w-8" /></div>
-             <p className="text-[#7A736E] font-mono text-xs animate-pulse">Loading rulesets...</p>
+             <p className="text-[#8E857E] font-mono text-xs animate-pulse">Loading rulesets...</p>
            </div>
          </div>
        ) : (
@@ -268,13 +266,13 @@ export function Promotions() {
                   exit={{ opacity: 0, scale: 0.9 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <Card className={`bg-[#1A1614] border ${promo.active ? 'border-[#3A3230] hover:border-[#FF6F00]' : 'border-[#3A3230]/50 opacity-70'} h-full flex flex-col transition-colors`}>
+                  <Card className={`glass-card glass-card-hover rounded-2xl border ${promo.active ? 'border-white/[0.09] hover:border-[#FF6F00]/50' : 'border-white/[0.05] opacity-60'} h-full flex flex-col transition-all shadow-[0_8px_32px_rgba(0,0,0,0.3)]`}>
                     <CardHeader className="flex flex-row justify-between items-start pb-2">
                       <div className="flex-1 pr-2">
                         <CardTitle className="text-sm font-bold text-[#FAF7F2] truncate" title={promo.name}>{promo.name}</CardTitle>
                         {promo.code && (
                           <div className="flex items-center gap-2 mt-2">
-                            <Badge variant="outline" className={`border-dashed ${promo.active ? 'border-[#1D9E75] text-[#1D9E75] bg-[#1D9E75]/10' : 'border-[#7A736E] text-[#7A736E] bg-transparent'} font-mono text-xs tracking-wider`}>
+                            <Badge variant="outline" className={`border-dashed ${promo.active ? 'border-[#1D9E75]/60 text-[#1D9E75] bg-[#1D9E75]/10' : 'border-white/20 text-[#8E857E] bg-transparent'} font-mono text-xs tracking-wider backdrop-blur-md`}>
                               {promo.code}
                             </Badge>
                           </div>
@@ -362,9 +360,10 @@ export function Promotions() {
        )}
 
        <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-          <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] max-w-lg">
+          <DialogContent className="glass-modal border border-white/[0.12] text-[#FAF7F2] max-w-lg rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.7)]">
              <DialogHeader>
-                <DialogTitle className="text-[#FF6F00] font-mono tracking-widest uppercase text-sm">
+                <DialogTitle className="text-[#FF6F00] font-mono tracking-widest uppercase text-sm flex items-center gap-2">
+                   <Ticket className="w-4 h-4" />
                    {editingPromo ? 'Edit Promotion' : 'New Rule'}
                 </DialogTitle>
              </DialogHeader>
@@ -378,7 +377,7 @@ export function Promotions() {
                      <Input 
                        value={name} 
                        onChange={(e) => setName(e.target.value)} 
-                       className={`bg-[#0A0C10] border ${formErrors.name ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'} text-sm text-[#FAF7F2]`}
+                       className={`bg-white/[0.04] border ${formErrors.name ? 'border-red-500 focus-visible:ring-red-500' : 'border-white/[0.1] focus-visible:ring-[#FF6F00]'} text-sm text-[#FAF7F2] backdrop-blur-md`}
                        placeholder="e.g. Summer Sale 2026, Buy 1 Get 1 Hotdog"
                      />
                      {formErrors.name && (
@@ -394,7 +393,7 @@ export function Promotions() {
                        <Input 
                          value={code} 
                          onChange={(e) => setCode(e.target.value.toUpperCase().replace(/\s+/g, ''))} 
-                         className={`bg-[#0A0C10] border ${formErrors.code ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'} text-sm font-mono text-[#FAF7F2] placeholder:text-[#7A736E]`}
+                         className={`bg-white/[0.04] border ${formErrors.code ? 'border-red-500 focus-visible:ring-red-500' : 'border-white/[0.1] focus-visible:ring-[#FF6F00]'} text-sm font-mono text-[#FAF7F2] placeholder:text-[#8E857E] backdrop-blur-md`}
                          placeholder="e.g. PROMO20 (Optional)"
                        />
                      </div>
@@ -408,14 +407,14 @@ export function Promotions() {
                      <select 
                        value={active.toString()} 
                        onChange={(e) => setActive(e.target.value === 'true')}
-                       className="w-full bg-[#0A0C10] border border-[#3A3230] focus:border-[#FF6F00] focus:ring-1 focus:ring-[#FF6F00] text-sm rounded-md px-3 h-10 outline-none text-[#FAF7F2]"
+                       className="w-full bg-white/[0.04] border border-white/[0.1] focus:border-[#FF6F00] focus:ring-1 focus:ring-[#FF6F00] text-sm rounded-md px-3 h-10 outline-none text-[#FAF7F2] backdrop-blur-md"
                      >
-                        <option value="true">Active</option>
-                        <option value="false">Inactive</option>
+                        <option value="true" className="bg-[#141210]">Active</option>
+                        <option value="false" className="bg-[#141210]">Inactive</option>
                      </select>
                    </div>
                    
-                   <div className="col-span-2 border-t border-[#3A3230] my-2 pt-4">
+                   <div className="col-span-2 border-t border-white/[0.08] my-2 pt-4">
                      <h4 className="text-xs font-mono font-bold text-[#FF6F00] mb-4">RULE DEFINITION</h4>
                    </div>
 
@@ -427,9 +426,9 @@ export function Promotions() {
                          setType(e.target.value as any);
                          if (e.target.value === 'BOGO') setValue(0);
                        }}
-                       className="w-full bg-[#0A0C10] border border-[#3A3230] focus:border-[#FF6F00] focus:ring-1 focus:ring-[#FF6F00] text-sm rounded-md px-3 h-10 outline-none text-[#FAF7F2]"
+                       className="w-full bg-white/[0.04] border border-white/[0.1] focus:border-[#FF6F00] focus:ring-1 focus:ring-[#FF6F00] text-sm rounded-md px-3 h-10 outline-none text-[#FAF7F2] backdrop-blur-md"
                      >
-                        <option value="PERCENTAGE">Percentage (%)</option>
+                        <option value="PERCENTAGE" className="bg-[#141210]">Percentage (%)</option>
                         <option value="FIXED">Fixed Amount (₱)</option>
                         <option value="BOGO">Buy One Get One</option>
                      </select>

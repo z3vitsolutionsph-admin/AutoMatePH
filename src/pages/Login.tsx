@@ -4,7 +4,7 @@ import { Navigate } from 'react-router-dom';
 import { Button } from '../components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
-import { ShoppingCart, LogIn, UserPlus, Eye, EyeOff } from 'lucide-react';
+import { ShoppingCart, LogIn, UserPlus, Eye, EyeOff, ShieldCheck, UserCheck, Key, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 
@@ -15,7 +15,6 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [name, setName] = useState('');
-  // role defaults to STORE_MANAGER for public registration 
   const role = 'STORE_MANAGER';
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -37,17 +36,42 @@ export function Login() {
     setName('');
   }, [isLogin]);
 
-  if (loading) return null;
+  if (loading) {
+    return (
+      <div className="min-h-screen w-full bg-[#0A0C10] flex flex-col items-center justify-center text-[#FAF7F2] font-mono gap-3 relative overflow-hidden">
+        <div className="pointer-events-none absolute w-96 h-96 bg-[#FF6F00]/[0.08] rounded-full blur-[120px]" />
+        <div className="w-9 h-9 border-2 border-[#FF6F00] border-t-transparent rounded-full animate-spin z-10"></div>
+        <span className="text-xs font-mono uppercase tracking-widest text-[#8E857E] z-10">
+          Loading Authorization...
+        </span>
+      </div>
+    );
+  }
   if (user) return <Navigate to="/" replace />;
 
   const handleGoogleSignIn = async () => {
     try {
       setIsLoading(true);
       await signInWithGoogle();
-      toast.success('Successfully authenticated');
+      toast.success('Successfully authenticated as System Administrator');
     } catch (error: any) {
       console.error(error);
-      toast.error(error.message || 'Failed to sign in with Google');
+      toast.error(error.message || 'Failed to sign in');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleQuickLogin = async (presetEmail: string, presetPass: string) => {
+    try {
+      setIsLoading(true);
+      setEmail(presetEmail);
+      setPassword(presetPass);
+      await signIn(presetEmail, presetPass);
+      toast.success(`Authenticated as ${presetEmail}`);
+    } catch (error: any) {
+      console.error(error);
+      toast.error(error.message || 'Authentication failed');
     } finally {
       setIsLoading(false);
     }
@@ -149,23 +173,7 @@ export function Login() {
       }
     } catch (error: any) {
       console.error(error);
-      const errorCode = error.code || '';
-      let errorMessage = error.message || 'Authentication failed';
-      if (errorCode === 'auth/invalid-credential' || errorMessage.includes('invalid-credential')) {
-        errorMessage = 'Invalid email or password';
-        setEmailError('Invalid email or password');
-        setPasswordError('Invalid email or password');
-      } else if (errorCode.includes('auth/user-not-found') || errorCode.includes('auth/wrong-password') || errorMessage.includes('auth/user-not-found') || errorMessage.includes('auth/wrong-password')) {
-        errorMessage = 'Invalid email or password';
-        setEmailError('Invalid email or password');
-        setPasswordError('Invalid email or password');
-      } else if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('email-already-in-use')) {
-        errorMessage = 'An account with this email already exists';
-        setEmailError('Email already in use');
-      } else if (errorCode === 'auth/weak-password' || errorMessage.includes('weak-password')) {
-        errorMessage = 'Password must be at least 6 characters';
-        setPasswordError('Password too weak');
-      }
+      const errorMessage = error.message || 'Authentication failed';
       toast.error(errorMessage);
     } finally {
       setIsLoading(false);
@@ -173,40 +181,56 @@ export function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0A0C10] flex items-center justify-center p-4">
+    <div className="min-h-screen w-full bg-[#0A0C10] flex items-center justify-center p-4 relative overflow-hidden font-sans">
+      {/* Ambient Glassmorphic Background Orbs */}
+      <div className="pointer-events-none absolute -top-40 -left-40 w-[500px] h-[500px] bg-[#FF6F00]/[0.08] rounded-full blur-[140px]" />
+      <div className="pointer-events-none absolute -bottom-40 -right-40 w-[500px] h-[500px] bg-[#1D9E75]/[0.08] rounded-full blur-[140px]" />
+      <div className="pointer-events-none absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-[#FF6F00]/[0.04] rounded-full blur-[160px]" />
+
       <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        transition={{ duration: 0.3, type: "spring", stiffness: 300, damping: 20 }}
-        className="w-full max-w-md"
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+        className="w-full max-w-md relative z-10"
       >
-        <Card className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] shadow-2xl relative overflow-hidden">
-          {/* Accent Line */}
-          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-[#FF6F00] to-[#1D9E75]"></div>
+        {/* Frosted Glass Authorization Card */}
+        <div className="bg-[#141210]/75 backdrop-blur-2xl border border-white/[0.12] text-[#FAF7F2] rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.65),inset_0_1px_1px_rgba(255,255,255,0.15)] overflow-hidden relative">
+          {/* Top Glass Specular Line */}
+          <div className="h-1 bg-gradient-to-r from-[#FF6F00] via-[#FF8F00] to-[#1D9E75] shadow-[0_0_12px_rgba(255,111,0,0.4)]"></div>
           
-          <CardHeader className="text-center space-y-2 pb-6 border-b border-[#3A3230] pt-8">
-            <div className="mx-auto bg-[#FF6F00]/10 w-16 h-16 rounded-full flex items-center justify-center mb-2 shadow-[0_0_15px_rgba(255,111,0,0.2)]">
+          <div className="text-center space-y-2 pb-6 border-b border-white/[0.08] pt-8 px-6">
+            <div className="mx-auto bg-gradient-to-br from-[#FF6F00]/20 to-[#FF6F00]/5 border border-[#FF6F00]/30 w-16 h-16 rounded-2xl flex items-center justify-center mb-3 shadow-[0_0_24px_rgba(255,111,0,0.25)] backdrop-blur-md">
               <ShoppingCart className="h-8 w-8 text-[#FF6F00]" />
             </div>
-            <CardTitle className="text-2xl font-bold tracking-tight">AUTOMATE<span className="text-[#FF6F00]">PH</span></CardTitle>
-            <CardDescription className="text-[#7A736E] font-mono text-xs uppercase tracking-widest">
+            <h1 className="text-2xl font-bold font-mono tracking-tight text-[#FAF7F2]">
+              AUTOMATE<span className="text-[#FF6F00]">PH</span>
+            </h1>
+            <p className="text-[#8E857E] font-mono text-xs uppercase tracking-widest">
               Terminal Authorization Required
-            </CardDescription>
-          </CardHeader>
+            </p>
+          </div>
           
-          <CardContent className="pt-6">
-            {/* Tabs */}
-            <div className="flex p-1 bg-[#0A0C10] rounded-md border border-[#3A3230] mb-6">
+          <div className="p-6">
+            {/* Glass Switcher Tabs */}
+            <div className="flex p-1 bg-white/[0.03] backdrop-blur-md rounded-xl border border-white/[0.08] mb-6">
               <button
                 type="button"
-                className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest transition-colors rounded-sm ${isLogin ? 'bg-[#1A1614] text-[#FF6F00] shadow-sm border border-[#FF6F00]/30' : 'text-[#7A736E] hover:text-[#FAF7F2]'}`}
+                className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider transition-all duration-200 rounded-lg ${
+                  isLogin 
+                    ? 'bg-[#FF6F00]/15 text-[#FF6F00] shadow-[0_0_15px_rgba(255,111,0,0.15)] border border-[#FF6F00]/30 backdrop-blur-md' 
+                    : 'text-[#8E857E] hover:text-[#FAF7F2]'
+                }`}
                 onClick={() => setIsLogin(true)}
               >
                 Sign In
               </button>
               <button
                 type="button"
-                className={`flex-1 py-2 text-xs font-bold uppercase tracking-widest transition-colors rounded-sm ${!isLogin ? 'bg-[#1A1614] text-[#1D9E75] shadow-sm border border-[#1D9E75]/30' : 'text-[#7A736E] hover:text-[#FAF7F2]'}`}
+                className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider transition-all duration-200 rounded-lg ${
+                  !isLogin 
+                    ? 'bg-[#1D9E75]/15 text-[#1D9E75] shadow-[0_0_15px_rgba(29,158,117,0.15)] border border-[#1D9E75]/30 backdrop-blur-md' 
+                    : 'text-[#8E857E] hover:text-[#FAF7F2]'
+                }`}
                 onClick={() => setIsLogin(false)}
               >
                 Register
@@ -223,17 +247,17 @@ export function Login() {
                     className="space-y-4 overflow-hidden"
                   >
                     <div className="space-y-1.5">
-                      <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Full Name</label>
+                      <label className="text-[10px] font-mono text-[#8E857E] uppercase tracking-wider">Full Name</label>
                       <Input
                         type="text"
-                        placeholder="John Doe"
+                        placeholder="Juan Dela Cruz"
                         value={name}
                         onChange={handleNameChange}
                         disabled={isLoading}
-                        className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] ${nameError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
+                        className={`bg-white/[0.04] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] backdrop-blur-md ${nameError ? 'border-red-500 focus-visible:ring-red-500' : 'border-white/[0.08]'}`}
                       />
                       {nameError && (
-                        <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{nameError}</p>
+                        <p className="text-red-400 text-[10px] font-mono mt-1">{nameError}</p>
                       )}
                     </div>
                   </motion.div>
@@ -241,22 +265,22 @@ export function Login() {
               </AnimatePresence>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Email Address</label>
+                <label className="text-[10px] font-mono text-[#8E857E] uppercase tracking-wider">Email Address</label>
                 <Input
                   type="email"
                   placeholder="admin@automate.ph"
                   value={email}
                   onChange={handleEmailChange}
                   disabled={isLoading}
-                  className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] ${emailError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
+                  className={`bg-white/[0.04] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] backdrop-blur-md ${emailError ? 'border-red-500 focus-visible:ring-red-500' : 'border-white/[0.08]'}`}
                 />
                 {emailError && (
-                  <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{emailError}</p>
+                  <p className="text-red-400 text-[10px] font-mono mt-1">{emailError}</p>
                 )}
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Password</label>
+                <label className="text-[10px] font-mono text-[#8E857E] uppercase tracking-wider">Password</label>
                 <div className="relative">
                   <Input
                     type={showPassword ? "text" : "password"}
@@ -264,19 +288,18 @@ export function Login() {
                     value={password}
                     onChange={handlePasswordChange}
                     disabled={isLoading}
-                    className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] pr-10 ${passwordError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
+                    className={`bg-white/[0.04] text-[#FAF7F2] font-mono pr-10 focus-visible:ring-[#FF6F00] backdrop-blur-md ${passwordError ? 'border-red-500 focus-visible:ring-red-500' : 'border-white/[0.08]'}`}
                   />
-                  <button 
-                    type="button" 
+                  <button
+                    type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    disabled={isLoading}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A736E] hover:text-[#FAF7F2] transition-colors disabled:opacity-50"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8E857E] hover:text-[#FAF7F2] transition-colors"
                   >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
                 {passwordError && (
-                  <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{passwordError}</p>
+                  <p className="text-red-400 text-[10px] font-mono mt-1">{passwordError}</p>
                 )}
               </div>
 
@@ -286,38 +309,43 @@ export function Login() {
                     initial={{ opacity: 0, height: 0, y: -10 }}
                     animate={{ opacity: 1, height: 'auto', y: 0 }}
                     exit={{ opacity: 0, height: 0, y: -10 }}
-                    className="space-y-1.5 overflow-hidden"
+                    className="space-y-4 overflow-hidden"
                   >
-                    <label className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Confirm Password</label>
-                    <div className="relative">
-                      <Input
-                        type={showConfirmPassword ? "text" : "password"}
-                        placeholder="••••••••"
-                        value={confirmPassword}
-                        onChange={handleConfirmPasswordChange}
-                        disabled={isLoading}
-                        className={`bg-[#0A0C10] text-[#FAF7F2] font-mono focus-visible:ring-[#FF6F00] pr-10 ${confirmPasswordError ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230]'}`}
-                      />
-                      <button 
-                        type="button" 
-                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                        disabled={isLoading}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A736E] hover:text-[#FAF7F2] transition-colors disabled:opacity-50"
-                      >
-                        {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                      </button>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-mono text-[#8E857E] uppercase tracking-wider">Confirm Password</label>
+                      <div className="relative">
+                        <Input
+                          type={showConfirmPassword ? "text" : "password"}
+                          placeholder="••••••••"
+                          value={confirmPassword}
+                          onChange={handleConfirmPasswordChange}
+                          disabled={isLoading}
+                          className={`bg-white/[0.04] text-[#FAF7F2] font-mono pr-10 focus-visible:ring-[#FF6F00] backdrop-blur-md ${confirmPasswordError ? 'border-red-500 focus-visible:ring-red-500' : 'border-white/[0.08]'}`}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8E857E] hover:text-[#FAF7F2] transition-colors"
+                        >
+                          {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      {confirmPasswordError && (
+                        <p className="text-red-400 text-[10px] font-mono mt-1">{confirmPasswordError}</p>
+                      )}
                     </div>
-                    {confirmPasswordError && (
-                      <p className="text-red-500 text-[10px] font-mono mt-1 pr-1 truncate animate-in fade-in slide-in-from-top-1">{confirmPasswordError}</p>
-                    )}
                   </motion.div>
                 )}
               </AnimatePresence>
 
-              <Button 
-                type="submit" 
+              <Button
+                type="submit"
                 disabled={isLoading}
-                className={`w-full h-12 font-bold uppercase tracking-widest ${isLogin ? 'bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black' : 'bg-[#1D9E75] hover:bg-[#1D9E75]/80 text-white'}`}
+                className={`w-full h-11 font-bold font-mono uppercase tracking-widest transition-all duration-200 rounded-xl shadow-lg mt-2 ${
+                  isLogin 
+                    ? 'bg-[#FF6F00] hover:bg-[#FF6F00]/90 text-[#0A0C10] shadow-[0_0_20px_rgba(255,111,0,0.3)]' 
+                    : 'bg-[#1D9E75] hover:bg-[#1D9E75]/90 text-white shadow-[0_0_20px_rgba(29,158,117,0.3)]'
+                }`}
               >
                 {isLoading ? (
                   <div className="flex items-center gap-2">
@@ -325,25 +353,83 @@ export function Login() {
                     PROCESSING...
                   </div>
                 ) : isLogin ? (
-                  <div className="flex items-center justify-center">
-                    <LogIn className="w-4 h-4 mr-2" />
+                  <div className="flex items-center justify-center gap-2">
+                    <LogIn className="w-4 h-4" />
                     AUTHORIZE ACCESS
                   </div>
                 ) : (
-                  <div className="flex items-center justify-center">
-                    <UserPlus className="w-4 h-4 mr-2" />
+                  <div className="flex items-center justify-center gap-2">
+                    <UserPlus className="w-4 h-4" />
                     CREATE ACCOUNT
                   </div>
                 )}
               </Button>
             </form>
 
-            <div className="relative mt-6 mb-6">
+            {/* Quick Demo Role Logins */}
+            <div className="mt-6 pt-5 border-t border-white/[0.08]">
+              <div className="flex items-center justify-between mb-2.5">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-[#8E857E] flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-[#FF6F00]" /> One-Click Role Access
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('z3vitsolutions.ph@gmail.com', 'password123')}
+                  className="px-2.5 py-2 rounded-lg bg-white/[0.03] hover:bg-[#FF6F00]/10 border border-white/[0.08] hover:border-[#FF6F00]/40 text-left transition-all backdrop-blur-md group"
+                >
+                  <div className="text-[10px] font-bold text-[#FF6F00] uppercase flex items-center justify-between">
+                    <span>Super Admin</span>
+                    <ShieldCheck className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                  </div>
+                  <span className="text-[9px] text-[#8E857E] truncate block">z3vitsolutions.ph</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('manager@automate.ph', 'password123')}
+                  className="px-2.5 py-2 rounded-lg bg-white/[0.03] hover:bg-[#1D9E75]/10 border border-white/[0.08] hover:border-[#1D9E75]/40 text-left transition-all backdrop-blur-md group"
+                >
+                  <div className="text-[10px] font-bold text-[#1D9E75] uppercase flex items-center justify-between">
+                    <span>Store Manager</span>
+                    <UserCheck className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                  </div>
+                  <span className="text-[9px] text-[#8E857E] truncate block">manager@automate.ph</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('cashier@automate.ph', 'password123')}
+                  className="px-2.5 py-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] hover:border-white/[0.2] text-left transition-all backdrop-blur-md group"
+                >
+                  <div className="text-[10px] font-bold text-[#FAF7F2] uppercase flex items-center justify-between">
+                    <span>POS Cashier</span>
+                    <Key className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                  </div>
+                  <span className="text-[9px] text-[#8E857E] truncate block">cashier@automate.ph</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleQuickLogin('clerk@automate.ph', 'password123')}
+                  className="px-2.5 py-2 rounded-lg bg-white/[0.03] hover:bg-white/[0.08] border border-white/[0.08] hover:border-white/[0.2] text-left transition-all backdrop-blur-md group"
+                >
+                  <div className="text-[10px] font-bold text-[#FAF7F2] uppercase flex items-center justify-between">
+                    <span>Inventory Clerk</span>
+                    <Key className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+                  </div>
+                  <span className="text-[9px] text-[#8E857E] truncate block">clerk@automate.ph</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="relative mt-6 mb-5">
               <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-[#3A3230]"></div>
+                <div className="w-full border-t border-white/[0.08]"></div>
               </div>
               <div className="relative flex justify-center text-[10px] uppercase font-mono tracking-widest">
-                <span className="bg-[#141210] px-2 text-[#7A736E]">OR CONTINUE WITH</span>
+                <span className="bg-[#141210] px-3 text-[#8E857E]">OR ENTERPRISE LOGIN</span>
               </div>
             </div>
 
@@ -352,7 +438,7 @@ export function Login() {
               onClick={handleGoogleSignIn} 
               disabled={isLoading}
               variant="outline"
-              className="w-full bg-[#1A1614] border-[#3A3230] text-[#FAF7F2] hover:bg-[#3A3230]/50 h-10 font-medium font-sans"
+              className="w-full bg-white/[0.03] hover:bg-white/[0.07] border-white/[0.1] text-[#FAF7F2] h-10 font-medium font-sans rounded-xl backdrop-blur-md transition-all"
             >
               <svg className="w-4 h-4 mr-2" viewBox="0 0 24 24">
                 <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
@@ -363,13 +449,13 @@ export function Login() {
               Google Workspace
             </Button>
             
-            <div className="mt-6 text-center">
-              <p className="text-[10px] text-[#7A736E] font-mono tracking-widest">
-                SECURE CONNECTION • 256-BIT ENCRYPTION
+            <div className="mt-5 text-center">
+              <p className="text-[10px] text-[#8E857E] font-mono tracking-widest uppercase">
+                Secure Session • Realtime Cloud Synchronized
               </p>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       </motion.div>
     </div>
   );

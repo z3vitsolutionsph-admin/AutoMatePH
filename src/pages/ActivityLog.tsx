@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
-import { db } from '../lib/firebase';
-import { collection, onSnapshot, query, orderBy, limit, getDocs, writeBatch, doc } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { db, collection, onSnapshot, query, orderBy, limit, getDocs, writeBatch, doc, realtime } from '../lib/realtime';
 import { dbLocal } from '../lib/db';
+import { useAuth } from '../contexts/AuthContext';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Activity, Trash2, Loader2, AlertTriangle } from 'lucide-react';
 import { Button } from '../components/ui/button';
@@ -31,6 +30,7 @@ export function ActivityLog() {
   const [logs, setLogs] = useState<Log[]>([]);
   const [isClearing, setIsClearing] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const { role } = useAuth();
 
   useEffect(() => {
     const q = query(collection(db, 'activityLogs'), orderBy('timestamp', 'desc'), limit(100));
@@ -38,7 +38,7 @@ export function ActivityLog() {
       const msgs: Log[] = [];
       snapshot.forEach(doc => msgs.push({ id: doc.id, ...doc.data() } as Log));
       setLogs(msgs);
-    }, (e) => handleFirestoreError(e, OperationType.GET, 'activityLogs'));
+    }, (e) => console.error('Activity logs subscription error:', e));
 
     return unsubscribe;
   }, []);
@@ -46,66 +46,19 @@ export function ActivityLog() {
   const handleClearAll = async () => {
     setIsClearing(true);
     try {
-      // Process in batches of 500 (Firestore limit)
-      const batches = [];
-      let currentBatch = writeBatch(db);
-      let operationCount = 0;
-
-      // 1. Clear Activity Logs
-      const qLogs = query(collection(db, 'activityLogs'));
-      const snapshotLogs = await getDocs(qLogs);
-      
-      snapshotLogs.docs.forEach((document) => {
-        currentBatch.delete(doc(db, 'activityLogs', document.id));
-        operationCount++;
-
-        if (operationCount === 500) {
-          batches.push(currentBatch.commit());
-          currentBatch = writeBatch(db);
-          operationCount = 0;
-        }
-      });
-
-      // 2. Clear Transactions
-      const qTxs = query(collection(db, 'transactions'));
-      const snapshotTxs = await getDocs(qTxs);
-
-      snapshotTxs.docs.forEach((document) => {
-        currentBatch.delete(doc(db, 'transactions', document.id));
-        operationCount++;
-
-        if (operationCount === 500) {
-          batches.push(currentBatch.commit());
-          currentBatch = writeBatch(db);
-          operationCount = 0;
-        }
-      });
-
-      // 3. Clear Local IndexedDB Transactions
+      await realtime.clearActivityLogs();
       if (dbLocal && dbLocal.transactions) {
         await dbLocal.transactions.clear();
       }
-
-      if (operationCount > 0) {
-        batches.push(currentBatch.commit());
-      }
-
-      if (batches.length === 0) {
-        toast.info("No activity logs or transactions to clear");
-        return;
-      }
-
-      await Promise.all(batches);
       toast.success("Activity history and transaction records have been successfully cleared.", {
         icon: '🗑️'
       });
       setIsConfirmOpen(false);
     } catch (error) {
       console.error("Error clearing logs:", error);
-      toast.error("Failed to clear activity logs. You may not have the required permissions.", {
+      toast.error("Failed to clear activity logs.", {
         icon: <AlertTriangle className="h-4 w-4 text-red-500" />
       });
-      handleFirestoreError(error, OperationType.DELETE, 'activityLogs/transactions');
     } finally {
       setIsClearing(false);
     }
@@ -134,20 +87,20 @@ export function ActivityLog() {
             <Trash2 className="h-4 w-4 mr-2" />
             Clear All Logs
           </AlertDialogTrigger>
-          <AlertDialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2]">
+          <AlertDialogContent className="glass-modal border border-white/[0.12] text-[#FAF7F2] rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.7)]">
             <AlertDialogHeader>
-              <AlertDialogTitle className="flex items-center gap-2 text-red-500">
+              <AlertDialogTitle className="flex items-center gap-2 text-red-400">
                 <AlertTriangle className="h-5 w-5" />
                 Clear Activity History
               </AlertDialogTitle>
-              <AlertDialogDescription className="text-[#7A736E]">
+              <AlertDialogDescription className="text-[#8E857E]">
                 Are you absolutely sure you want to delete all activity logs? This action is permanent and cannot be undone. All historical tracking data will be lost.
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter className="mt-6">
               <AlertDialogCancel 
                 disabled={isClearing}
-                className="bg-transparent border-[#3A3230] text-[#FAF7F2] hover:bg-[#3A3230]"
+                className="bg-transparent border-white/[0.1] text-[#FAF7F2] hover:bg-white/[0.08]"
               >
                 Cancel
               </AlertDialogCancel>
@@ -174,31 +127,31 @@ export function ActivityLog() {
         </AlertDialog>
       </div>
 
-      <div className="border border-[#3A3230] bg-[#0A0C10] flex-1 overflow-hidden flex flex-col">
+      <div className="glass-panel rounded-2xl border border-white/[0.08] shadow-[0_8px_32px_rgba(0,0,0,0.3)] flex-1 overflow-hidden flex flex-col">
         <div className="overflow-x-auto flex-1">
           <Table>
-            <TableHeader className="bg-[#1A1614]">
-              <TableRow className="border-[#3A3230] hover:bg-transparent">
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider w-[180px]">TIMESTAMP</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">TYPE</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider">USER</TableHead>
-                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#7A736E] uppercase tracking-wider min-w-[200px]">DETAILS</TableHead>
+            <TableHeader className="bg-white/[0.03]">
+              <TableRow className="border-b border-white/[0.08] hover:bg-transparent">
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider w-[180px]">TIMESTAMP</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider">TYPE</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider">USER</TableHead>
+                <TableHead className="text-[10px] whitespace-nowrap font-mono text-[#8E857E] uppercase tracking-wider min-w-[200px]">DETAILS</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="text-sm font-mono">
               {logs.map((log) => {
                 const date = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp || Date.now());
                 return (
-                  <TableRow key={log.id} className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors">
-                    <TableCell className="text-[#7A736E] whitespace-nowrap">
+                  <TableRow key={log.id} className="border-b border-white/[0.05] hover:bg-white/[0.035] transition-colors">
+                    <TableCell className="text-[#8E857E] whitespace-nowrap font-mono tabular-nums">
                       {date.toLocaleString()}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
-                      <span className="text-[#7A736E]">
+                      <span className="px-2 py-0.5 rounded text-[11px] font-mono border border-[#1D9E75]/30 bg-[#1D9E75]/10 text-[#1D9E75]">
                         {log.type.replace(/_/g, ' ')}
                       </span>
                     </TableCell>
-                    <TableCell className="text-[#1D9E75] truncate max-w-[150px]" title={log.userId}>
+                    <TableCell className="text-[#FAF7F2] font-semibold truncate max-w-[150px]" title={log.userId}>
                       {log.userId}
                     </TableCell>
                     <TableCell className="text-[#FAF7F2] font-sans break-words whitespace-normal min-w-[200px]">
@@ -208,8 +161,8 @@ export function ActivityLog() {
                 );
               })}
               {logs.length === 0 && (
-                <TableRow className="border-[#3A3230] bg-[#141210]">
-                  <TableCell colSpan={4} className="h-24 text-center font-mono text-[#7A736E] uppercase tracking-widest text-[10px]">
+                <TableRow className="border-b border-white/[0.06] bg-transparent">
+                  <TableCell colSpan={4} className="h-24 text-center font-mono text-[#8E857E] uppercase tracking-widest text-[10px]">
                     NO ACTIVITY RECORDED
                   </TableCell>
                 </TableRow>

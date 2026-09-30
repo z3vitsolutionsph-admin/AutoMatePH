@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { db, auth } from '../lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { db, collection, onSnapshot, doc, updateDoc, deleteDoc, serverTimestamp, realtime } from '../lib/realtime';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -10,9 +8,6 @@ import { AlertDialog, AlertDialogContent, AlertDialogDescription, AlertDialogFoo
 import { Plus, Search, Edit2, ShieldAlert, UserX, UserCheck, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from 'sonner';
-import { initializeApp } from 'firebase/app';
-import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
 
 interface UserData {
   id: string;
@@ -22,16 +17,6 @@ interface UserData {
   isActive: boolean;
   createdAt: any;
   updatedAt: any;
-}
-
-// Ensure secondary app is initialized outside to prevent memory leak/re-initialization
-let secondaryApp: any = null;
-let secondaryAuth: any = null;
-try {
-  secondaryApp = initializeApp(firebaseConfig, "SecondaryAuthApp-" + Date.now());
-  secondaryAuth = getAuth(secondaryApp);
-} catch (e) {
-  console.error("Failed to init secondary app", e);
 }
 
 export function UserManagement() {
@@ -63,16 +48,16 @@ export function UserManagement() {
       setIsSubmitting(false);
     }, (error) => {
       setIsSubmitting(false);
-      handleFirestoreError(error, OperationType.GET, 'users');
+      console.error('Error fetching users:', error);
     });
 
     return () => unsubscribe();
   }, [canManage]);
 
   const filteredUsers = users.filter(user => 
-    user.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.role.toLowerCase().includes(searchQuery.toLowerCase())
+    user.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    user.role?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const resetForm = () => {
@@ -90,7 +75,7 @@ export function UserManagement() {
     if (user) {
       setEditingUser(user);
       setEmail(user.email);
-      setPassword(''); // Password isn't fetched, obviously
+      setPassword('');
       setName(user.name);
       setRole(user.role);
       setIsActive(user.isActive !== false);
@@ -145,59 +130,50 @@ export function UserManagement() {
     try {
       setIsSubmitting(true);
       if (editingUser) {
-        // Only update name and maybe role/isActive if we allow it via firestore.rules
-        const userRef = doc(db, 'users', editingUser.id);
-        const updateData: any = {
-           name,
-           updatedAt: serverTimestamp()
+        const updateData = {
+          name: name.trim(),
+          role,
+          isActive,
         };
-        
-        if (currentUserRole === 'SUPER_ADMIN') {
-            updateData.role = role;
-            updateData.isActive = isActive;
+
+        const res = await fetch(`/api/auth/users/${editingUser.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(updateData),
+        });
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to update user');
         }
 
-        await updateDoc(userRef, updateData);
         toast.success('User updated successfully');
       } else {
-        // CREATE NEW USER using secondary Firebase app to not logout current user
-        if (!secondaryAuth) throw new Error("Secondary auth app not initialized");
-        
-        toast.info("Creating user account... please wait.");
-        const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email, password);
-        const newUserId = userCredential.user.uid;
-        
-        // now sign out of secondary App
-        await secondaryAuth.signOut();
-        
-        // create the user document using the MAIN firebase app doc reference
-        const userDocRef = doc(db, 'users', newUserId);
-        await setDoc(userDocRef, {
-          email,
-          name,
-          role,
-          isActive: true,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
+        const res = await fetch('/api/auth/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: email.trim().toLowerCase(),
+            password,
+            name: name.trim(),
+            role,
+          }),
         });
-        
+
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to create user');
+        }
+
         toast.success('User created successfully');
       }
       setIsDialogOpen(false);
       resetForm();
     } catch (error: any) {
       console.error('Error saving user:', error);
-      const errorCode = error.code || '';
       let errorMessage = error.message || 'Operation failed';
       
-      if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('email-already-in-use')) {
-        errorMessage = 'This email is already registered';
-        setFormErrors(prev => ({ ...prev, email: errorMessage }));
-      } else if (errorCode === 'auth/weak-password' || errorMessage.includes('weak-password')) {
-        errorMessage = 'Password must be at least 6 characters';
-        setFormErrors(prev => ({ ...prev, password: errorMessage }));
-      } else if (errorCode === 'auth/invalid-email' || errorMessage.includes('invalid-email')) {
-        errorMessage = 'Please enter a valid email address';
+      if (errorMessage.includes('already exists')) {
         setFormErrors(prev => ({ ...prev, email: errorMessage }));
       } else {
         setFormErrors(prev => ({ ...prev, general: errorMessage }));
@@ -210,14 +186,15 @@ export function UserManagement() {
 
   const toggleUserStatus = async (user: UserData) => {
     try {
-       const userRef = doc(db, 'users', user.id);
-       await updateDoc(userRef, {
-           isActive: !user.isActive,
-           updatedAt: serverTimestamp()
-       });
-       toast.success(`User ${user.isActive ? 'disabled' : 'enabled'} successfully`);
+      const res = await fetch(`/api/auth/users/${user.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive: !user.isActive }),
+      });
+      if (!res.ok) throw new Error('Failed to update status');
+      toast.success(`User ${user.isActive ? 'disabled' : 'enabled'} successfully`);
     } catch (error: any) {
-       handleFirestoreError(error, OperationType.UPDATE, `users/${user.id}`);
+      toast.error(error.message || 'Failed to change user status');
     }
   };
 
@@ -228,12 +205,15 @@ export function UserManagement() {
     
     try {
       setIsSubmitting(true);
-      await deleteDoc(doc(db, 'users', user.id));
+      const res = await fetch(`/api/auth/users/${user.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('Failed to delete user');
       toast.success(`User ${user.name} deleted successfully`);
       setDeleteConfirmationUser(null);
     } catch (error: any) {
       console.error('Error deleting user:', error);
-      handleFirestoreError(error, OperationType.DELETE, `users/${user.id}`);
+      toast.error(error.message || 'Failed to delete user');
     } finally {
       setIsSubmitting(false);
     }
@@ -258,237 +238,272 @@ export function UserManagement() {
         </div>
         
         <div className="flex items-center gap-2">
-          <Dialog open={isDialogOpen} onOpenChange={isOpen => {
-            if (!isOpen) { setIsDialogOpen(false); resetForm(); }
-            else openDialog();
-          }}>
-            <DialogTrigger render={(props: any) => (
-              <Button {...props} className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-semibold">
-                <Plus className="mr-2 h-4 w-4" /> Add User
-              </Button>
-            )} />
-            <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md">
-              <DialogHeader>
-                <DialogTitle className="text-[#FF6F00] uppercase tracking-widest text-sm border-b border-[#3A3230] pb-4">
-                  {editingUser ? 'Edit User' : 'Create User Account'}
-                </DialogTitle>
-              </DialogHeader>
-              <form onSubmit={handleSave} className="space-y-4 pt-4">
-                {formErrors.general && (
-                  <div className="bg-red-500/10 border border-red-500/50 text-red-500 px-3 py-2 rounded text-sm mb-4">
-                    {formErrors.general}
-                  </div>
-                )}
-                {!editingUser && (
-                  <>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] text-[#7A736E] uppercase tracking-wider">Email Address</label>
-                      <Input
-                        required
-                        type="email"
-                        value={email}
-                        onChange={(e) => {
-                          setEmail(e.target.value);
-                          if (formErrors.email) setFormErrors(prev => ({ ...prev, email: undefined }));
-                        }}
-                        className={`bg-[#0A0C10] text-[#FAF7F2] ${formErrors.email ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'}`}
-                      />
-                      {formErrors.email && <p className="text-red-500 text-xs mt-1">{formErrors.email}</p>}
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[10px] text-[#7A736E] uppercase tracking-wider">Password</label>
-                      <Input
-                        required
-                        type="password"
-                        value={password}
-                        onChange={(e) => {
-                          setPassword(e.target.value);
-                          if (formErrors.password) setFormErrors(prev => ({ ...prev, password: undefined }));
-                        }}
-                        className={`bg-[#0A0C10] text-[#FAF7F2] ${formErrors.password ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'}`}
-                      />
-                      {formErrors.password && <p className="text-red-500 text-xs mt-1">{formErrors.password}</p>}
-                    </div>
-                  </>
-                )}
-                
-                <div className="space-y-1.5">
-                  <label className="text-[10px] text-[#7A736E] uppercase tracking-wider">Full Name</label>
-                  <Input
-                    required
-                    value={name}
-                    onChange={(e) => {
-                      setName(e.target.value);
-                      if (formErrors.name) setFormErrors(prev => ({ ...prev, name: undefined }));
-                    }}
-                    className={`bg-[#0A0C10] text-[#FAF7F2] ${formErrors.name ? 'border-red-500 focus-visible:ring-red-500' : 'border-[#3A3230] focus-visible:ring-[#FF6F00]'}`}
-                  />
-                  {formErrors.name && <p className="text-red-500 text-xs mt-1">{formErrors.name}</p>}
-                </div>
-                
-                <div className="space-y-1.5">
-                  <label className="text-[10px] text-[#7A736E] uppercase tracking-wider">Role</label>
-                  <select
-                    value={role}
-                    onChange={(e) => setRole(e.target.value)}
-                    className="flex h-10 w-full rounded-md border border-[#3A3230] bg-[#0A0C10] px-3 py-2 text-sm text-[#FAF7F2] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#FF6F00]"
-                  >
-                    <option value="CASHIER">CASHIER</option>
-                    <option value="INVENTORY_CLERK">INVENTORY CLERK</option>
-                    <option value="STORE_MANAGER">STORE MANAGER</option>
-                    {currentUserRole === 'SUPER_ADMIN' && <option value="SUPER_ADMIN">SUPER ADMIN</option>}
-                  </select>
-                </div>
-                
-                {editingUser && (
-                  <div className="space-y-1.5 pt-2">
-                     <label className="text-[10px] text-[#7A736E] uppercase tracking-wider block">Account Status</label>
-                     <div className="flex items-center gap-2">
-                       <input 
-                         type="checkbox" 
-                         checked={isActive} 
-                         onChange={(e) => setIsActive(e.target.checked)}
-                         className="rounded border-[#3A3230] bg-[#0A0C10] text-[#1D9E75] focus:ring-[#1D9E75]"
-                       />
-                       <span className="text-sm">Active (Can Login)</span>
-                     </div>
-                  </div>
-                )}
-                
-                <div className="flex justify-end gap-3 pt-4 border-t border-[#3A3230]">
-                  <Button type="button" variant="ghost" onClick={() => setIsDialogOpen(false)} className="text-[#7A736E] hover:text-[#FAF7F2]">Cancel</Button>
-                  <Button type="submit" disabled={isSubmitting} className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black">
-                    {isSubmitting ? 'Saving...' : 'Save User'}
-                  </Button>
-                </div>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button 
+            onClick={() => openDialog()}
+            className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-[#0A0C10] font-bold"
+          >
+            <Plus className="w-4 h-4 mr-2" /> Add Staff Account
+          </Button>
         </div>
       </div>
 
-      <div className="bg-[#0A0C10] border border-[#3A3230] p-1 flex items-center w-full max-w-md h-12">
-        <div className="px-3 text-[#7A736E]">
-          <Search className="h-5 w-5" />
+      <div className="flex items-center gap-4 bg-white/[0.03] backdrop-blur-xl p-3 rounded-xl border border-white/[0.08] shadow-sm">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#8E857E]" />
+          <Input 
+            placeholder="Search by name, email, or role..." 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-9 bg-white/[0.04] border-white/[0.08] text-[#FAF7F2] font-mono text-sm focus-visible:ring-[#FF6F00] backdrop-blur-md"
+          />
         </div>
-        <input 
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="SEARCH USERS..." 
-          className="bg-transparent w-full text-sm outline-none font-mono placeholder-[#3A3230] text-[#FAF7F2]"
-        />
       </div>
 
-      <div className="border border-[#3A3230] bg-[#0A0C10] rounded-sm overflow-hidden flex flex-col">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-[#1A1614]">
-              <TableRow className="border-[#3A3230] hover:bg-transparent">
-                <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Name</TableHead>
-                <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Email</TableHead>
-                <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Role</TableHead>
-                <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">Status</TableHead>
-                <TableHead className="text-[10px] font-mono text-[#7A736E] uppercase tracking-wider text-right">Actions</TableHead>
+      <div className="glass-panel rounded-2xl border border-white/[0.08] overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.3)]">
+        <Table>
+          <TableHeader>
+            <TableRow className="border-b border-white/[0.08] bg-white/[0.02] hover:bg-transparent">
+              <TableHead className="font-mono text-xs text-[#8E857E] uppercase tracking-wider">USER</TableHead>
+              <TableHead className="font-mono text-xs text-[#8E857E] uppercase tracking-wider">EMAIL</TableHead>
+              <TableHead className="font-mono text-xs text-[#8E857E] uppercase tracking-wider">ROLE</TableHead>
+              <TableHead className="font-mono text-xs text-[#8E857E] uppercase tracking-wider">STATUS</TableHead>
+              <TableHead className="font-mono text-xs text-[#8E857E] uppercase tracking-wider text-right">ACTIONS</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredUsers.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center py-8 text-[#8E857E] font-mono text-sm">
+                  No accounts found
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody className="text-sm font-mono">
-              {filteredUsers.map((user) => (
-                <TableRow key={user.id} className="border-[#3A3230] bg-[#141210] hover:bg-[#1A1614] transition-colors">
-                  <TableCell className="text-[#FAF7F2] font-sans font-medium">{user.name}</TableCell>
-                  <TableCell className="text-[#7A736E]">{user.email}</TableCell>
-                  <TableCell>
-                    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold tracking-wider ${
-                      user.role === 'SUPER_ADMIN' ? 'bg-purple-500/10 text-purple-400' :
-                      user.role === 'STORE_MANAGER' ? 'bg-[#FF6F00]/10 text-[#FF6F00]' :
-                      user.role === 'INVENTORY_CLERK' ? 'bg-blue-500/10 text-blue-400' :
-                      'bg-[#1D9E75]/10 text-[#1D9E75]'
-                    }`}>
-                      {user.role.replace('_', ' ')}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                     {user.isActive !== false ? (
-                       <span className="flex items-center text-[#1D9E75] text-[10px] uppercase tracking-wider"><UserCheck className="w-3 h-3 mr-1"/> Active</span>
-                     ) : (
-                       <span className="flex items-center text-red-500 text-[10px] uppercase tracking-wider"><UserX className="w-3 h-3 mr-1"/> Disabled</span>
-                     )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button 
-                      variant="ghost" 
-                      size="icon"
-                      onClick={() => openDialog(user)}
-                      className="h-8 w-8 text-[#7A736E] hover:text-[#FAF7F2] hover:bg-[#3A3230]"
-                    >
-                      <Edit2 className="h-4 w-4" />
-                    </Button>
-                    <Button 
-                      variant="ghost" 
-                      size="icon"
-                      onClick={() => toggleUserStatus(user)}
-                      className={`h-8 w-8 ml-1 ${user.isActive !== false ? 'text-red-500 hover:bg-red-500/10' : 'text-[#1D9E75] hover:bg-[#1D9E75]/10'}`}
-                      title={user.isActive !== false ? "Disable User" : "Enable User"}
-                    >
-                      {user.isActive !== false ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
-                    </Button>
-                    {currentUser?.uid !== user.id && (
-                      <Button 
-                        variant="ghost" 
-                        size="icon"
-                        onClick={() => setDeleteConfirmationUser(user)}
-                        className="h-8 w-8 ml-1 text-red-500 hover:text-red-400 hover:bg-red-500/10"
-                        title="Delete User"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {filteredUsers.length === 0 && (
-                <TableRow className="border-[#3A3230] hover:bg-transparent">
-                  <TableCell colSpan={5} className="h-24 text-center text-[#7A736E]">
-                    No users found matching your criteria.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </div>
+            ) : (
+              filteredUsers.map((user) => {
+                const isSuperAdminUser = user.role === 'SUPER_ADMIN';
+                const isSelf = currentUser?.uid === user.id;
+
+                return (
+                  <TableRow key={user.id} className="border-b border-white/[0.05] hover:bg-white/[0.035] transition-colors">
+                    <TableCell className="font-medium text-[#FAF7F2]">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-lg bg-white/[0.05] border border-white/[0.1] flex items-center justify-center font-mono font-bold text-[#FF6F00] text-xs backdrop-blur-md shadow-sm">
+                          {user.name ? user.name.charAt(0).toUpperCase() : '?'}
+                        </div>
+                        <div>
+                          <div className="font-bold">{user.name}</div>
+                          {isSelf && <span className="text-[10px] font-mono text-[#1D9E75]">(You)</span>}
+                        </div>
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-mono text-sm text-[#8E857E]">{user.email}</TableCell>
+                    <TableCell>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-mono font-medium border backdrop-blur-md ${
+                        user.role === 'SUPER_ADMIN' 
+                          ? 'bg-[#FF6F00]/10 text-[#FF6F00] border-[#FF6F00]/30'
+                          : user.role === 'STORE_MANAGER'
+                          ? 'bg-[#1D9E75]/10 text-[#1D9E75] border-[#1D9E75]/30'
+                          : user.role === 'INVENTORY_CLERK'
+                          ? 'bg-blue-500/10 text-blue-400 border-blue-500/30'
+                          : 'bg-neutral-500/10 text-neutral-300 border-neutral-500/30'
+                      }`}>
+                        {user.role}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-mono font-medium ${
+                        user.isActive !== false ? 'text-[#1D9E75]' : 'text-red-400'
+                      }`}>
+                        <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
+                          user.isActive !== false ? 'bg-[#1D9E75]' : 'bg-red-400'
+                        }`} />
+                        {user.isActive !== false ? 'ACTIVE' : 'DISABLED'}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openDialog(user)}
+                          className="h-8 w-8 p-0 text-[#7A736E] hover:text-[#FAF7F2] hover:bg-[#3A3230]/40"
+                          title="Edit User"
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
+                        
+                        {!isSelf && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleUserStatus(user)}
+                            className="h-8 w-8 p-0 text-[#7A736E] hover:text-[#FAF7F2] hover:bg-[#3A3230]/40"
+                            title={user.isActive !== false ? "Disable Account" : "Enable Account"}
+                          >
+                            {user.isActive !== false ? (
+                              <UserX className="w-4 h-4 text-amber-500" />
+                            ) : (
+                              <UserCheck className="w-4 h-4 text-[#1D9E75]" />
+                            )}
+                          </Button>
+                        )}
+
+                        {!isSelf && !isSuperAdminUser && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setDeleteConfirmationUser(user)}
+                            className="h-8 w-8 p-0 text-[#7A736E] hover:text-red-500 hover:bg-[#3A3230]/40"
+                            title="Delete User"
+                          >
+                            <Trash2 className="w-4 h-4 text-red-500" />
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
       </div>
 
+      {/* User Form Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold">
+              {editingUser ? 'Edit Staff Account' : 'Create Staff Account'}
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleSave} className="space-y-4 pt-4">
+            {formErrors.general && (
+              <div className="p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 font-mono text-xs">
+                {formErrors.general}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-mono text-[#7A736E] uppercase">Full Name</label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Juan Dela Cruz"
+                className={`bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] focus-visible:ring-[#FF6F00] ${
+                  formErrors.name ? 'border-red-500' : ''
+                }`}
+              />
+              {formErrors.name && (
+                <p className="text-xs text-red-500 font-mono">{formErrors.name}</p>
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-mono text-[#7A736E] uppercase">Email Address</label>
+              <Input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="cashier@automate.ph"
+                disabled={!!editingUser}
+                className={`bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] focus-visible:ring-[#FF6F00] ${
+                  editingUser ? 'opacity-50 cursor-not-allowed' : ''
+                } ${formErrors.email ? 'border-red-500' : ''}`}
+              />
+              {formErrors.email && (
+                <p className="text-xs text-red-500 font-mono">{formErrors.email}</p>
+              )}
+            </div>
+
+            {!editingUser && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-mono text-[#7A736E] uppercase">Password</label>
+                <Input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className={`bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] focus-visible:ring-[#FF6F00] ${
+                    formErrors.password ? 'border-red-500' : ''
+                  }`}
+                />
+                {formErrors.password && (
+                  <p className="text-xs text-red-500 font-mono">{formErrors.password}</p>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-mono text-[#7A736E] uppercase">System Role</label>
+              <select
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="w-full h-10 px-3 rounded-md bg-[#0A0C10] border border-[#3A3230] text-[#FAF7F2] font-mono text-sm focus:outline-none focus:ring-1 focus:ring-[#FF6F00]"
+              >
+                <option value="CASHIER">CASHIER (Point of Sale)</option>
+                <option value="INVENTORY_CLERK">INVENTORY CLERK (Products & POs)</option>
+                <option value="STORE_MANAGER">STORE MANAGER (Full Ops & Reports)</option>
+                <option value="SUPER_ADMIN">SUPER ADMIN (Complete System Control)</option>
+              </select>
+            </div>
+
+            {editingUser && (
+              <div className="flex items-center justify-between pt-2">
+                <label className="text-xs font-mono text-[#7A736E] uppercase">Account Active</label>
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(e) => setIsActive(e.target.checked)}
+                  className="rounded border-[#3A3230] bg-[#0A0C10] text-[#FF6F00] focus:ring-[#FF6F00] w-4 h-4"
+                />
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-4 border-t border-[#3A3230]">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsDialogOpen(false)}
+                className="border-[#3A3230] text-[#FAF7F2] hover:bg-[#3A3230]/40"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-[#0A0C10] font-bold"
+              >
+                {isSubmitting ? 'Saving...' : editingUser ? 'Save Changes' : 'Create Account'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete User Confirmation */}
       <AlertDialog open={!!deleteConfirmationUser} onOpenChange={(open) => !open && setDeleteConfirmationUser(null)}>
-        <AlertDialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono">
+        <AlertDialogContent className="bg-[#141210] border-[#3A3230] text-[#FAF7F2]">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-red-500">Delete User Account</AlertDialogTitle>
-            <AlertDialogDescription className="text-[#7A736E]">
-              Are you sure you want to permanently delete <span className="font-bold text-[#FAF7F2]">{deleteConfirmationUser?.name}</span>? 
-              This action will remove their access to the application immediately.
-              <br /><br />
-              <span className="text-red-400 text-xs gap-1 flex items-center">
-                <ShieldAlert className="w-3 h-3" />
-                Note: This deletes their app data. You must also delete their Authentication record from the Firebase Console to fully erase their credentials.
-              </span>
+            <AlertDialogTitle className="text-red-500 font-bold">Delete Staff Account</AlertDialogTitle>
+            <AlertDialogDescription className="text-[#7A736E] font-mono text-sm">
+              Are you sure you want to delete user "{deleteConfirmationUser?.name}" ({deleteConfirmationUser?.email})? This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <Button 
-              variant="outline" 
-              onClick={() => setDeleteConfirmationUser(null)} 
-              disabled={isSubmitting} 
-              className="border-[#3A3230] bg-transparent hover:bg-[#1A1614] text-[#FAF7F2]"
+            <Button
+              variant="outline"
+              onClick={() => setDeleteConfirmationUser(null)}
+              className="border-[#3A3230] text-[#FAF7F2]"
             >
               Cancel
             </Button>
-            <Button 
-              onClick={(e) => {
-                e.preventDefault();
-                handleDeleteUser();
-              }}
+            <Button
+              onClick={handleDeleteUser}
               disabled={isSubmitting}
-              className="bg-red-500 hover:bg-red-600 text-white"
+              className="bg-red-600 hover:bg-red-700 text-white font-bold"
             >
-              {isSubmitting ? 'Deleting...' : 'Delete Permanently'}
+              {isSubmitting ? 'Deleting...' : 'Delete Account'}
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>

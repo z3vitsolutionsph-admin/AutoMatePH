@@ -5,6 +5,7 @@ export interface OfflineTransaction {
   syncId: string;
   transactionData: any;
   status: 'pending' | 'synced' | 'failed';
+  error?: string;
   createdAt: string;
 }
 

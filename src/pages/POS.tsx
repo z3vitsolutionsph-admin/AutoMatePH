@@ -7,10 +7,8 @@ import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
-import { db, auth } from '../lib/firebase';
-import { collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch, increment } from 'firebase/firestore';
+import { realtime, collection, addDoc, serverTimestamp, getDocs, onSnapshot, updateDoc, doc, writeBatch, increment, runTransaction, db, auth } from '../lib/realtime';
 import { dbLocal } from '../lib/db';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
 import { formatCurrency } from '../lib/utils';
 import { BrowserMultiFormatReader } from '@zxing/library';
 import Fuse from 'fuse.js';
@@ -67,6 +65,15 @@ export function POS() {
   const [receiptModalOpen, setReceiptModalOpen] = useState(false);
   const [completedTx, setCompletedTx] = useState<any>(null);
   const receiptPrintRef = useRef<HTMLDivElement>(null);
+  
+  // Auto-print preference
+  const [autoPrintReceipt, setAutoPrintReceipt] = useState(() => {
+    return localStorage.getItem('pos:autoPrintReceipt') !== 'false';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('pos:autoPrintReceipt', autoPrintReceipt.toString());
+  }, [autoPrintReceipt]);
 
   const handlePrintReceipt = useReactToPrint({
     contentRef: receiptPrintRef,
@@ -76,54 +83,74 @@ export function POS() {
   });
 
   useEffect(() => {
-    const handleOnline = async () => {
-      setIsOffline(false);
+    let timer: NodeJS.Timeout;
+    if (receiptModalOpen && completedTx && autoPrintReceipt) {
+      // Small delay to ensure the DOM is painted and the receipt layout is evaluated
+      timer = setTimeout(() => {
+        handlePrintReceipt();
+      }, 500);
+    }
+    return () => clearTimeout(timer);
+  }, [receiptModalOpen, completedTx, autoPrintReceipt, handlePrintReceipt]);
+
+  useEffect(() => {
+    const syncOfflineTransactions = async () => {
+      if (isOffline) return;
       try {
         const pendingTxs = await dbLocal.transactions.where('status').equals('pending').toArray();
-        if (pendingTxs.length > 0) {
+        if (pendingTxs.length > 0 && !isSyncing) {
           setIsSyncing(true);
           toast.success(`Syncing ${pendingTxs.length} offline transactions...`);
           let successCount = 0;
           for (const tx of pendingTxs) {
             try {
-              const batch = writeBatch(db);
-              
-              // 1. Add transaction
-              const txRef = doc(collection(db, 'transactions'));
-              batch.set(txRef, {
-                ...tx.transactionData,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-                isOfflineSync: true
-              });
+              await runTransaction(db, async (transaction) => {
+                const productRefs = (tx.transactionData.items || []).map((item: any) => doc(db, 'products', item.productId));
+                const productDocs = await Promise.all(productRefs.map((ref: any) => transaction.get(ref)));
+                
+                // Validate stock
+                productDocs.forEach((prodDoc: any, i) => {
+                  if (!prodDoc.exists()) throw new Error(`Product does not exist`);
+                  const currentStock = prodDoc.data().stock || 0;
+                  if (currentStock < tx.transactionData.items[i].quantity) {
+                    throw new Error(`Insufficient stock for product ${prodDoc.id}`);
+                  }
+                });
 
-              // 2. Reduce stock
-              if (tx.transactionData && tx.transactionData.items) {
-                for (const item of tx.transactionData.items) {
-                  const productRef = doc(db, 'products', item.productId);
-                  batch.update(productRef, {
+                // Write transaction
+                const currentCashierId = auth.currentUser?.uid || tx.transactionData.cashierId;
+                const txRef = doc(collection(db, 'transactions'));
+                transaction.set(txRef, {
+                  ...tx.transactionData,
+                  cashierId: currentCashierId,
+                  createdAt: serverTimestamp(),
+                  updatedAt: serverTimestamp(),
+                  isOfflineSync: true
+                });
+
+                // Update stock
+                (tx.transactionData.items || []).forEach((item: any, i: number) => {
+                  transaction.update(productRefs[i], {
                     stock: increment(-item.quantity),
                     updatedAt: serverTimestamp()
                   });
-                }
-              }
+                });
 
-              // 3. Activity Log
-              const logRef = doc(collection(db, 'activityLogs'));
-              batch.set(logRef, {
-                type: 'SALE',
-                userId: tx.transactionData.cashierId || 'Unknown',
-                details: `Synced offline SALE for ₱${formatCurrency(tx.transactionData.totalAmount)} (${tx.transactionData.items?.length || 0} items)`,
-                timestamp: serverTimestamp()
+                // Activity log
+                const logRef = doc(collection(db, 'activityLogs'));
+                transaction.set(logRef, {
+                  type: 'SALE',
+                  userId: tx.transactionData.cashierId || 'Unknown',
+                  details: `Synced offline SALE for ₱${formatCurrency(tx.transactionData.totalAmount)} (${tx.transactionData.items?.length || 0} items)`,
+                  timestamp: serverTimestamp()
+                });
               });
 
-              await batch.commit();
-
-              // 4. Mark as synced locally
               await dbLocal.transactions.update(tx.id!, { status: 'synced' });
               successCount++;
-            } catch (err) {
+            } catch (err: any) {
               console.error("Failed to sync specific tx:", err);
+              await dbLocal.transactions.update(tx.id!, { status: 'failed', error: err.message });
             }
           }
           setIsSyncing(false);
@@ -131,11 +158,22 @@ export function POS() {
         }
       } catch (e) {
         setIsSyncing(false);
-        console.error("Failed to sync offline tx", e);
-        toast.error("Failed to sync some offline transactions.");
+        console.error("Failed to fetch pending tx", e);
       }
     };
+
+    const handleOnline = () => {
+      setIsOffline(false);
+      syncOfflineTransactions();
+    };
     
+    // Robust background syncing queue: checks every 30 seconds
+    const syncInterval = setInterval(() => {
+      if (!isOffline && navigator.onLine) {
+        syncOfflineTransactions();
+      }
+    }, 30000);
+
     const handleOffline = () => setIsOffline(true);
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
@@ -148,7 +186,7 @@ export function POS() {
       });
       setProducts(prods);
     }, (error) => {
-       handleFirestoreError(error, OperationType.GET, 'products');
+       console.error('Products subscription error:', error);
     });
 
     // Fetch active promotions
@@ -168,6 +206,7 @@ export function POS() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      clearInterval(syncInterval);
       unsubscribe();
       unsubscribePromos();
     };
@@ -192,6 +231,10 @@ export function POS() {
       if (exactMatch) {
          addToCart(exactMatch);
          setSearchQuery('');
+         // Optimize UI for Scanning: Regain focus
+         setTimeout(() => {
+           searchInputRef.current?.focus();
+         }, 10);
       }
     }
   }, [searchQuery, products]);
@@ -304,17 +347,26 @@ export function POS() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if inside checkout modal or receipt modal
+      if (checkoutModalOpen || receiptModalOpen) return;
+      
       if (e.key === 'F1') {
         e.preventDefault();
         searchInputRef.current?.focus();
       } else if (e.key === 'F2') {
         e.preventDefault();
         initiateCheckout('CASH');
+      } else if (e.key === 'F3') {
+        e.preventDefault();
+        initiateCheckout('E_WALLET');
+      } else if (e.key === 'F4') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('open-terminal'));
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cart]);
+  }, [cart, checkoutModalOpen, receiptModalOpen]);
 
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
@@ -514,13 +566,16 @@ export function POS() {
 
     if (isOffline) {
       try {
-        newTxId = crypto.randomUUID();
+        newTxId = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+          ? crypto.randomUUID()
+          : `tx-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
         await dbLocal.transactions.add({
           syncId: newTxId,
           transactionData,
           status: 'pending',
           createdAt: timestamp.toISOString()
         });
+        realtime.refreshPendingCount();
         toast.success('Offline mode: Transaction queued locally.', {
           icon: <WifiOff className="h-4 w-4" />
         });
@@ -531,37 +586,47 @@ export function POS() {
       }
     } else {
       try {
-         const batch = writeBatch(db);
-         const txRef = doc(collection(db, 'transactions'));
-         
-         batch.set(txRef, {
-           ...transactionData,
-           createdAt: serverTimestamp(),
-           updatedAt: serverTimestamp()
-         });
-         newTxId = txRef.id;
+         await runTransaction(db, async (transaction) => {
+           const productRefs = cart.map(item => doc(db, 'products', item.id));
+           const productDocs = await Promise.all(productRefs.map(ref => transaction.get(ref)));
+           
+           // Verify stock
+           productDocs.forEach((prodDoc, i) => {
+             if (!prodDoc.exists()) throw new Error(`Product ${cart[i].name} does not exist`);
+             const currentStock = prodDoc.data().stock || 0;
+             if (currentStock < cart[i].quantity) {
+               throw new Error(`Insufficient stock for ${cart[i].name}. Only ${currentStock} left.`);
+             }
+           });
 
-         for (const item of cart) {
-           const productRef = doc(db, 'products', item.id);
-           batch.update(productRef, {
-             stock: increment(-item.quantity),
+           const txRef = doc(collection(db, 'transactions'));
+           newTxId = txRef.id;
+           transaction.set(txRef, {
+             ...transactionData,
+             createdAt: serverTimestamp(),
              updatedAt: serverTimestamp()
            });
-         }
 
-         const logRef = doc(collection(db, 'activityLogs'));
-         batch.set(logRef, {
-           type: 'SALE',
-           userId: cashierId,
-           details: `Completed SALE for ₱${formatCurrency(total)} (${cart.length} items)`,
-           timestamp: serverTimestamp()
+           cart.forEach((item, i) => {
+             transaction.update(productRefs[i], {
+               stock: increment(-item.quantity),
+               updatedAt: serverTimestamp()
+             });
+           });
+
+           const logRef = doc(collection(db, 'activityLogs'));
+           transaction.set(logRef, {
+             type: 'SALE',
+             userId: cashierId,
+             details: `Completed SALE for ₱${formatCurrency(total)} (${cart.length} items)`,
+             timestamp: serverTimestamp()
+           });
          });
          
-         await batch.commit();
-         
          toast.success('Transaction Completed Successfully');
-      } catch (error) {
-         handleFirestoreError(error, OperationType.CREATE, 'transactions');
+      } catch (error: any) {
+         toast.error(error.message || 'Failed to complete transaction due to an error');
+         console.error("Transaction Error:", error);
          return; 
       }
     }
@@ -604,23 +669,23 @@ export function POS() {
         <div className="flex-1 flex flex-col gap-4">
         <div className="flex flex-col gap-4">
           <div className="flex gap-4">
-            <div className="flex-1 bg-[#0A0C10] border border-[#3A3230] p-1 flex items-center h-12">
-              <div className="px-3 text-[#7A736E]">
+            <div className="flex-1 bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] p-1 flex items-center h-12 rounded-xl shadow-sm focus-within:border-[#FF6F00] transition-colors">
+              <div className="px-3 text-[#8E857E]">
                 <Search className="h-5 w-5" />
               </div>
               <input 
                 ref={searchInputRef}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="bg-transparent w-full text-sm outline-none font-mono placeholder-[#3A3230] text-[#FAF7F2]" 
-                placeholder="SCAN BARCODE OR [F1] SEARCH PRODUCTS..."
+                className="bg-transparent w-full text-xs sm:text-sm outline-none font-mono placeholder-[#8E857E] text-[#FAF7F2]" 
+                placeholder="Scan barcode or press [F1] to search products..."
               />
               {!isScanning && (
                 <Button 
                   type="button"
                   onClick={startScanner}
                   variant="ghost"
-                  className="text-[#1D9E75] hover:text-[#1D9E75] hover:bg-[#3A3230]/50 shrink-0 h-full px-4 rounded-none"
+                  className="text-[#1D9E75] hover:text-[#1D9E75] hover:bg-[#1D9E75]/10 shrink-0 h-full px-3.5 rounded-lg"
                   title="Scan with Camera"
                 >
                   <Camera className="h-5 w-5" />
@@ -628,15 +693,15 @@ export function POS() {
               )}
             </div>
             
-            <div className="w-[140px] sm:w-[200px] bg-[#0A0C10] border border-[#3A3230] h-12 flex items-center shrink-0">
+            <div className="w-[140px] sm:w-[200px] bg-white/[0.03] backdrop-blur-xl border border-white/[0.08] h-12 flex items-center shrink-0 rounded-xl px-2 shadow-sm">
                 <select
                   value={selectedCategory}
                   onChange={(e) => setSelectedCategory(e.target.value)}
-                  className="w-full bg-transparent text-[#FAF7F2] text-sm font-mono outline-none px-3 h-full appearance-none cursor-pointer"
+                  className="w-full bg-transparent text-[#FAF7F2] text-xs font-mono outline-none px-2 h-full appearance-none cursor-pointer"
                 >
-                  <option value="All">ALL CATEGORIES</option>
+                  <option value="All" className="bg-[#141210] text-[#FAF7F2]">All Categories</option>
                   {categories.map((c) => (
-                    <option key={c} value={c}>{c.toUpperCase()}</option>
+                    <option key={c} value={c} className="bg-[#141210] text-[#FAF7F2]">{c}</option>
                   ))}
                 </select>
             </div>
@@ -673,15 +738,15 @@ export function POS() {
           {filteredProducts.map(product => (
             <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} key={product.id}>
               <Card 
-                className="bg-[#141210] border-[#3A3230] hover:border-[#FF6F00] cursor-pointer transition-all relative overflow-hidden h-full flex flex-col group"
+                className="glass-card glass-card-hover rounded-xl cursor-pointer transition-all relative overflow-hidden h-full flex flex-col group border border-white/[0.08]"
                 onClick={() => addToCart(product)}
               >
-                <div className="absolute top-2 right-2 text-xs font-mono font-bold text-[#1D9E75] bg-[#141210]/90 px-2 py-0.5 rounded shadow z-10 backdrop-blur-sm border border-[#3A3230]">
+                <div className="absolute top-2 right-2 text-xs font-mono font-bold text-[#1D9E75] bg-[#141210]/85 px-2 py-0.5 rounded-md shadow z-10 backdrop-blur-md border border-white/[0.08]">
                   {product.stock} in stock
                 </div>
                 
                 {product.imageUrl ? (
-                  <div className="w-full h-32 md:h-40 overflow-hidden bg-[#0A0C10] relative">
+                  <div className="w-full h-32 md:h-40 overflow-hidden bg-black/40 relative">
                     <img 
                       src={product.imageUrl} 
                       alt={product.name} 
@@ -691,9 +756,9 @@ export function POS() {
                     <div className="absolute inset-0 bg-gradient-to-t from-[#141210] to-transparent pointer-events-none" />
                   </div>
                 ) : (
-                  <div className="w-full h-32 md:h-40 bg-[#0A0C10] flex flex-col items-center justify-center text-[#3A3230]">
-                    <div className="h-10 w-10 border-2 border-dashed border-[#3A3230] rounded-lg mb-2 opacity-50 flex items-center justify-center">
-                      <span className="text-[10px] uppercase font-bold">Image</span>
+                  <div className="w-full h-32 md:h-40 bg-white/[0.02] flex flex-col items-center justify-center text-[#8E857E]">
+                    <div className="h-10 w-10 border border-dashed border-white/[0.15] rounded-lg mb-2 opacity-60 flex items-center justify-center">
+                      <span className="text-[10px] uppercase font-bold text-[#8E857E]">No Pic</span>
                     </div>
                   </div>
                 )}
@@ -702,10 +767,10 @@ export function POS() {
                   <div className="text-[#FAF7F2] font-medium leading-tight mb-2 line-clamp-2" title={product.name}>
                     {product.name}
                   </div>
-                  <div className="text-[#FF6F00] font-mono font-bold text-lg mt-auto">
+                  <div className="text-[#FF6F00] font-mono tabular-nums font-bold text-lg mt-auto">
                     ₱{formatCurrency(product.price)}
                   </div>
-                  <div className="text-[#7A736E] font-mono text-xs mt-1">
+                  <div className="text-[#8E857E] font-mono text-xs mt-1">
                     {product.barcode}
                   </div>
                 </CardContent>
@@ -713,28 +778,28 @@ export function POS() {
             </motion.div>
           ))}
           {filteredProducts.length === 0 && (
-            <div className="col-span-full h-32 flex items-center justify-center text-[#7A736E] font-mono border border-dashed border-[#3A3230] rounded-xl">
-              NO INVENTORY MATCH
+            <div className="col-span-full h-32 flex items-center justify-center text-[#8E857E] font-mono border border-dashed border-white/[0.1] rounded-xl bg-white/[0.02]">
+              No products found matching criteria
             </div>
           )}
         </div>
       </div>
 
       {/* Cart Section */}
-      <div className="flex-1 max-w-full lg:max-w-[450px] xl:max-w-[500px] flex flex-col border border-[#3A3230] bg-[#0A0C10] shrink-0">
-        <div className="p-4 border-b border-[#3A3230] flex justify-between items-center bg-[#1A1614]">
+      <div className="flex-1 max-w-full lg:max-w-[450px] xl:max-w-[500px] flex flex-col glass-panel rounded-2xl border border-white/[0.1] shadow-[0_16px_48px_rgba(0,0,0,0.4)] shrink-0 overflow-hidden">
+        <div className="p-4 border-b border-white/[0.08] flex justify-between items-center bg-white/[0.02]">
           <h2 className="text-[#FAF7F2] font-bold flex items-center gap-2 uppercase tracking-widest text-xs font-mono">
             <ShoppingCart className="h-4 w-4 text-[#FF6F00]" />
             Current Order
           </h2>
           {isOffline && (
-            <Badge variant="outline" className="bg-red-500/10 text-red-500 border-red-500/50 text-[10px] tracking-widest uppercase">
-              OFFLINE QUEUE
+            <Badge variant="outline" className="bg-amber-500/10 text-amber-400 border-amber-500/40 text-[10px] tracking-wider uppercase backdrop-blur-md">
+              Offline Queue
             </Badge>
           )}
         </div>
         
-        <div className="hidden sm:grid grid-cols-12 gap-2 px-4 py-3 bg-[#1A1614] border-b border-[#3A3230] text-[10px] font-mono text-[#7A736E] uppercase tracking-wider">
+        <div className="hidden sm:grid grid-cols-12 gap-2 px-4 py-3 bg-white/[0.02] border-b border-white/[0.08] text-[10px] font-mono text-[#8E857E] uppercase tracking-wider">
           <div className="col-span-4">Item</div>
           <div className="col-span-3 text-center">Qty</div>
           <div className="col-span-2 text-right">Unit</div>
@@ -750,29 +815,29 @@ export function POS() {
                 initial={{ opacity: 0, x: -20 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, scale: 0.9 }}
-                className="flex flex-col sm:grid sm:grid-cols-12 gap-2 px-4 py-3 border-b border-[#3A3230] bg-[#141210] sm:items-center"
+                className="flex flex-col sm:grid sm:grid-cols-12 gap-2 px-4 py-3 border-b border-white/[0.06] hover:bg-white/[0.03] transition-colors sm:items-center"
               >
                 <div className="sm:col-span-4 flex flex-col sm:block truncate pr-2">
                    <div className="text-[#FAF7F2] truncate font-sans font-bold">{item.name}</div>
-                   <div className="text-[10px] text-[#7A736E] sm:hidden font-mono">Unit: ₱{formatCurrency(item.price)}</div>
+                   <div className="text-[10px] text-[#8E857E] sm:hidden font-mono">Unit: ₱{formatCurrency(item.price)}</div>
                 </div>
                 
                 <div className="flex items-center justify-between sm:contents mt-2 sm:mt-0">
                   <div className="sm:col-span-3 flex justify-start sm:justify-center items-center">
-                    <div className="flex items-center bg-[#1A1614] rounded border border-[#3A3230]">
-                      <button onClick={() => updateQuantity(item.id, -1)} className="p-1 sm:p-1.5 hover:bg-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2]"><Minus className="h-3 w-3 sm:h-4 sm:w-4"/></button>
-                      <span className="px-2 font-bold text-xs sm:text-sm min-w-[2rem] text-center text-[#FAF7F2]">{item.quantity}</span>
-                      <button onClick={() => updateQuantity(item.id, 1)} className="p-1 sm:p-1.5 hover:bg-[#3A3230] text-[#7A736E] hover:text-[#FAF7F2]"><Plus className="h-3 w-3 sm:h-4 sm:w-4"/></button>
+                    <div className="flex items-center bg-white/[0.05] rounded-lg border border-white/[0.08] backdrop-blur-md">
+                      <button onClick={() => updateQuantity(item.id, -1)} className="p-1 sm:p-1.5 hover:bg-white/[0.1] text-[#8E857E] hover:text-[#FAF7F2] transition-colors"><Minus className="h-3 w-3 sm:h-4 sm:w-4"/></button>
+                      <span className="px-2 font-bold text-xs sm:text-sm min-w-[2rem] text-center font-mono tabular-nums text-[#FAF7F2]">{item.quantity}</span>
+                      <button onClick={() => updateQuantity(item.id, 1)} className="p-1 sm:p-1.5 hover:bg-white/[0.1] text-[#8E857E] hover:text-[#FAF7F2] transition-colors"><Plus className="h-3 w-3 sm:h-4 sm:w-4"/></button>
                     </div>
                   </div>
 
-                  <div className="sm:col-span-2 text-right hidden sm:block text-[#7A736E] text-xs">
+                  <div className="sm:col-span-2 text-right hidden sm:block text-[#8E857E] font-mono tabular-nums text-xs">
                     {formatCurrency(item.price)}
                   </div>
 
                   <div className="sm:col-span-3 flex justify-end items-center gap-3">
-                    <span className="text-[#1D9E75] font-bold text-sm sm:text-base">₱{formatCurrency(item.subtotal)}</span>
-                    <button onClick={() => removeFromCart(item.id)} className="p-2 text-red-500 hover:bg-red-500/10 rounded transition-colors" title="Remove">
+                    <span className="text-[#1D9E75] font-bold font-mono tabular-nums text-sm sm:text-base">₱{formatCurrency(item.subtotal)}</span>
+                    <button onClick={() => removeFromCart(item.id)} className="p-1.5 text-[#8E857E] hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors" title="Remove">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </div>
@@ -782,23 +847,23 @@ export function POS() {
           </AnimatePresence>
 
           {cart.length === 0 && (
-            <div className="h-full flex flex-col items-center justify-center text-[#7A736E] gap-2 p-6">
-              <ShoppingCart className="h-8 w-8 opacity-20" />
-              <p className="font-mono text-xs uppercase tracking-widest">CART IS EMPTY</p>
+            <div className="h-full flex flex-col items-center justify-center text-[#8E857E] gap-2 p-6">
+              <ShoppingCart className="h-8 w-8 opacity-20 text-[#FF6F00]" />
+              <p className="font-mono text-xs uppercase tracking-widest">Order is empty</p>
             </div>
           )}
         </div>
 
         {/* Promo Input Section */}
-        <div className="bg-[#141210] border-t border-[#3A3230] p-3">
+        <div className="bg-white/[0.02] border-t border-white/[0.08] p-3 backdrop-blur-md">
           <div className="flex items-center gap-2">
              <div className="flex-1 relative">
-                <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#7A736E]" />
+                <Tag className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#8E857E]" />
                 <Input 
                   value={promoCodeInput}
                   onChange={e => setPromoCodeInput(e.target.value)}
                   placeholder="Promo Code" 
-                  className="bg-[#0A0C10] border-[#3A3230] pl-8 h-8 text-xs font-mono uppercase text-[#FAF7F2]"
+                  className="bg-white/[0.04] border-white/[0.08] pl-8 h-8 text-xs font-mono uppercase text-[#FAF7F2] backdrop-blur-md focus-visible:ring-[#FF6F00]"
                   onKeyDown={e => e.key === 'Enter' && applyPromoCode()}
                   disabled={cart.length === 0}
                 />
@@ -806,35 +871,35 @@ export function POS() {
              <Button 
                onClick={applyPromoCode}
                disabled={!promoCodeInput.trim() || cart.length === 0}
-               className="bg-[#3A3230] hover:bg-[#FF6F00] text-[#FAF7F2] h-8 text-xs px-3 font-mono"
+               className="bg-white/[0.08] hover:bg-[#FF6F00] text-[#FAF7F2] hover:text-[#0A0C10] h-8 text-xs px-3 font-mono border border-white/[0.1] transition-all"
              >
                Apply
              </Button>
           </div>
           {appliedPromo && (
-             <div className="mt-2 text-[10px] font-mono flex items-center justify-between bg-[#1D9E75]/10 border border-[#1D9E75]/30 p-1.5 rounded">
-                <div className="flex items-center gap-1.5 text-[#1D9E75]">
-                   <CheckCircle2 className="h-3 w-3" />
+             <div className="mt-2 text-[10px] font-mono flex items-center justify-between bg-[#1D9E75]/15 border border-[#1D9E75]/35 p-2 rounded-lg backdrop-blur-md">
+                <div className="flex items-center gap-1.5 text-[#1D9E75] font-semibold">
+                   <CheckCircle2 className="h-3.5 w-3.5" />
                    <span>{appliedPromo.name}</span>
                 </div>
-                <button onClick={() => setAppliedPromo(null)} className="text-[#1D9E75] hover:text-red-500 hover:scale-110 transition-transform">
-                  <X className="h-3 w-3" />
+                <button onClick={() => setAppliedPromo(null)} className="text-[#1D9E75] hover:text-red-400 hover:scale-110 transition-transform">
+                  <X className="h-3.5 w-3.5" />
                 </button>
              </div>
           )}
         </div>
 
-        <div className="p-4 bg-[#1A1614] flex flex-col gap-4 border-t-2 border-[#FF6F00]">
+        <div className="p-4 bg-white/[0.03] backdrop-blur-md flex flex-col gap-4 border-t border-white/[0.08]">
           <div className="flex justify-between items-end">
             <div className="flex gap-8">
                <div>
-                  <p className="text-[10px] text-[#7A736E] uppercase font-mono mb-1">Items</p>
-                  <p className="text-lg font-bold font-mono text-[#FAF7F2] leading-none">{cart.reduce((s, i) => s + i.quantity, 0).toString().padStart(2, '0')}</p>
+                  <p className="text-[10px] text-[#8E857E] uppercase font-mono mb-1">Total Items</p>
+                  <p className="text-xl font-bold font-mono text-[#FAF7F2] leading-none">{cart.reduce((s, i) => s + i.quantity, 0).toString().padStart(2, '0')}</p>
                </div>
             </div>
             <div className="text-right flex flex-col gap-1">
               {discountAmount > 0 && (
-                <div className="flex items-center justify-end gap-2 text-[#7A736E]">
+                <div className="flex items-center justify-end gap-2 text-[#8E857E]">
                   <span className="text-[10px] font-mono uppercase line-through">Sub: ₱{formatCurrency(subtotal)}</span>
                   <span className="text-[10px] font-mono uppercase bg-[#1D9E75]/20 text-[#1D9E75] px-1 rounded">-₱{formatCurrency(discountAmount)}</span>
                 </div>
@@ -842,60 +907,75 @@ export function POS() {
               <p className="text-xs text-[#FF6F00] uppercase font-bold tracking-widest mt-1">Total Due</p>
               <motion.p 
                 key={total}
-                initial={{ scale: 1.1, color: '#FF6F00' }}
+                initial={{ scale: 1.05, color: '#FF6F00' }}
                 animate={{ scale: 1, color: '#FAF7F2' }}
-                className="text-3xl font-bold leading-none mt-1 font-sans tracking-tight"
+                className="text-3xl font-bold font-mono tabular-nums leading-none mt-1 tracking-tight text-[#FAF7F2]"
               >
                 ₱{formatCurrency(total)}
               </motion.p>
             </div>
           </div>
           
+          <div className="flex items-center gap-2 mt-2 select-none">
+            <input 
+              type="checkbox" 
+              id="autoPrintReceipt" 
+              checked={autoPrintReceipt}
+              onChange={(e) => setAutoPrintReceipt(e.target.checked)}
+              className="accent-[#FF6F00] h-3.5 w-3.5"
+            />
+            <label htmlFor="autoPrintReceipt" className="text-[10px] uppercase font-mono tracking-widest text-[#7A736E] cursor-pointer">
+              Auto-print receipt on success
+            </label>
+          </div>
+
           <div className="grid grid-cols-2 gap-2 mt-2">
              <Button 
                onClick={() => initiateCheckout('CASH')}
                disabled={cart.length === 0}
-               className="h-12 bg-[#FF6F00] hover:bg-[#FF6F00]/80 text-black font-bold uppercase tracking-widest text-xs rounded-sm"
+               className="h-12 bg-[#FF6F00] hover:bg-[#FF6F00]/90 text-[#0A0C10] font-bold font-mono uppercase tracking-wider text-xs rounded-xl shadow-[0_0_20px_rgba(255,111,0,0.25)] transition-all"
              >
-               CASH (F2)
+               Cash (F2)
              </Button>
              <Button 
                onClick={() => initiateCheckout('E_WALLET')}
                disabled={cart.length === 0}
-               className="h-12 bg-[#1A1614] border border-[#FF6F00] hover:bg-[#FF6F00]/10 text-[#FF6F00] font-bold uppercase tracking-widest text-xs rounded-sm"
+               className="h-12 bg-white/[0.05] border border-[#FF6F00]/50 hover:bg-[#FF6F00]/15 text-[#FF6F00] font-bold font-mono uppercase tracking-wider text-xs rounded-xl backdrop-blur-md transition-all"
              >
-               G-CASH
+               GCash (F3)
              </Button>
           </div>
         </div>
+      </div>
       </div>
       
       {/* Checkout Modal */}
       <Dialog open={checkoutModalOpen} onOpenChange={setCheckoutModalOpen}>
         <DialogContent 
-          className="bg-[#0A0C10] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md"
+          className="glass-modal border border-white/[0.12] text-[#FAF7F2] font-mono sm:max-w-md rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.7)]"
         >
           <DialogHeader>
-            <DialogTitle className="text-[#FF6F00] uppercase tracking-widest text-sm border-b border-[#3A3230] pb-4">
-              Cash Checkout
+            <DialogTitle className="text-[#FF6F00] uppercase tracking-wider text-sm border-b border-white/[0.08] pb-3 flex items-center gap-2">
+              <Banknote className="w-4 h-4 text-[#FF6F00]" />
+              Cash Settlement
             </DialogTitle>
           </DialogHeader>
-          <div className="py-2 flex flex-col gap-6">
-            <div className="flex justify-between items-center text-lg">
-              <span className="text-[#7A736E] uppercase">Total Due</span>
-              <span className="text-3xl font-bold font-sans text-[#FAF7F2]">₱{formatCurrency(total)}</span>
+          <div className="py-2 flex flex-col gap-5">
+            <div className="flex justify-between items-center text-lg bg-white/[0.02] p-3.5 rounded-xl border border-white/[0.06]">
+              <span className="text-[#8E857E] uppercase text-xs">Total Due</span>
+              <span className="text-3xl font-bold font-mono tabular-nums text-[#FAF7F2]">₱{formatCurrency(total)}</span>
             </div>
             
             <div className="flex flex-col gap-2 relative">
-              <label className="text-xs uppercase text-[#7A736E] tracking-widest">Cash Received</label>
+              <label className="text-xs uppercase text-[#8E857E] tracking-wider">Cash Tendered</label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#7A736E] font-sans text-xl">₱</span>
+                <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#8E857E] font-mono text-xl">₱</span>
                 <Input
                   ref={cashInputRef}
                   type="number"
                   value={cashReceived}
                   onChange={(e) => setCashReceived(e.target.value)}
-                  className="pl-8 h-14 bg-[#141210] border-[#FF6F00] text-2xl font-sans text-[#FAF7F2] focus-visible:ring-1 focus-visible:ring-[#FF6F00]"
+                  className="pl-9 h-14 bg-white/[0.04] border-white/[0.12] text-2xl font-mono tabular-nums text-[#FAF7F2] rounded-xl focus-visible:ring-1 focus-visible:ring-[#FF6F00] backdrop-blur-md"
                   placeholder="0.00"
                   step="0.01"
                   min={total}
@@ -909,14 +989,14 @@ export function POS() {
                 />
               </div>
               {Number(cashReceived) > 0 && Number(cashReceived) < total && (
-                 <p className="text-red-500 text-xs text-right mt-1">Insufficient amount</p>
+                 <p className="text-red-400 text-xs text-right mt-1">Insufficient tendered amount</p>
               )}
             </div>
 
             {Number(cashReceived) > 0 && (
-              <div className="flex justify-between items-center bg-[#141210] p-4 rounded-sm border border-[#3A3230]">
-                <span className="text-[#7A736E] uppercase tracking-widest text-xs">Change</span>
-                <span className={`text-2xl font-bold font-sans ${Number(cashReceived) < total ? 'text-red-500' : 'text-[#1D9E75]'}`}>
+              <div className="flex justify-between items-center bg-white/[0.03] p-4 rounded-xl border border-white/[0.08] backdrop-blur-md">
+                <span className="text-[#8E857E] uppercase tracking-wider text-xs">Change Due</span>
+                <span className={`text-2xl font-bold font-mono tabular-nums ${Number(cashReceived) < total ? 'text-red-400' : 'text-[#1D9E75]'}`}>
                   ₱{formatCurrency(Number(cashReceived) - total)}
                 </span>
               </div>
@@ -951,7 +1031,7 @@ export function POS() {
         if (!open) closeReceiptAndNewTransaction();
       }}>
         <DialogContent 
-          className="bg-[#141210] border-[#3A3230] text-[#FAF7F2] font-mono sm:max-w-md p-0 overflow-hidden [&>button]:opacity-0"
+          className="glass-modal border border-white/[0.12] text-[#FAF7F2] font-mono sm:max-w-md p-0 overflow-hidden [&>button]:opacity-0 rounded-2xl shadow-[0_24px_64px_rgba(0,0,0,0.7)]"
         >
           <div className="flex flex-col items-center justify-center p-6 bg-[#1D9E75]/10 border-b border-[#3A3230]">
               <CheckCircle2 className="h-12 w-12 text-[#1D9E75] mb-2" />
@@ -1126,7 +1206,6 @@ export function POS() {
           </div>
         </DialogContent>
       </Dialog>
-    </div>
     </div>
   );
 }

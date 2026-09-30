@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { db, auth } from '../lib/firebase';
-import { collection, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, writeBatch, increment } from 'firebase/firestore';
-import { handleFirestoreError, OperationType } from '../lib/firestore-error';
+import { db, auth, collection, onSnapshot, doc, updateDoc, addDoc, serverTimestamp, writeBatch, increment, realtime } from '../lib/realtime';
 import { formatCurrency } from '../lib/utils';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Button } from './ui/button';
@@ -138,7 +136,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       ordersList.sort((a, b) => new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime());
       setOrders(ordersList);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'purchaseOrders');
+      console.error('Error fetching purchase orders:', error);
     });
 
     return () => unsubscribe();
@@ -236,8 +234,9 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       toast.success('Supplier Order created');
       setIsDialogOpen(false);
       resetForm();
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'purchaseOrders');
+    } catch (error: any) {
+      console.error('Create PO error:', error);
+      toast.error(error.message || 'Failed to create purchase order');
     } finally {
       setIsSubmitting(false);
     }
@@ -277,27 +276,11 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       });
 
       // Update stock for each item
-      order.items.forEach(item => {
-        const productRef = doc(db, 'products', item.productId);
-        batch.update(productRef, {
-          stock: increment(item.quantity),
-          updatedAt: serverTimestamp()
-        });
-      });
-      
-      // Add activity log
-      const logRef = doc(collection(db, 'activityLogs'));
-      batch.set(logRef, {
-        type: 'INBOUND_DELIVERY',
-        userId: user?.email || user?.uid || 'Unknown',
-        details: `Received delivery for order from ${order.supplierName} (${order.items.length} items)`,
-        timestamp: serverTimestamp()
-      });
-
-      await batch.commit();
+      await realtime.receivePurchaseOrder(order.id, user?.email || user?.uid || 'Unknown');
       toast.success('Order marked as delivered and stock updated');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `purchaseOrders/${order.id}`);
+    } catch (error: any) {
+      console.error('Delivery error:', error);
+      toast.error(error.message || 'Failed to process order delivery');
     } finally {
       setIsSubmitting(false);
     }
@@ -329,7 +312,7 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       // Add activity log
       const logRef = doc(collection(db, 'activityLogs'));
       batch.set(logRef, {
-        type: 'ORDER_CANCELLED',
+        type: 'PURCHASE_ORDER',
         userId: user?.email || user?.uid || 'Unknown',
         details: `Cancelled order for ${order.supplierName} (${order.items.length} items)`,
         timestamp: serverTimestamp()
@@ -337,8 +320,9 @@ export function PurchaseOrders({ products, suppliers, prefilledPOItem, onClearPr
       
       await batch.commit();
       toast.success('Order cancelled');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `purchaseOrders/${order.id}`);
+    } catch (error: any) {
+      console.error('Cancel order error:', error);
+      toast.error(error.message || 'Failed to cancel order');
     } finally {
       setIsSubmitting(false);
     }
